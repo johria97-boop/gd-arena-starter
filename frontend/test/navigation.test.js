@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { normalizePath, resolveAppRoute, ROUTES, subscribeToHistory, updateBrowserHistory } from '../src/services/navigation.js';
+import { activatePracticeSetup, normalizePath, resolveAppRoute, ROUTES, subscribeToHistory, updateBrowserHistory } from '../src/services/navigation.js';
 
 function fakeBrowser(start = '/') {
   const listeners = new Set();
@@ -67,4 +67,39 @@ test('browser back and forward popstate updates are observed and cleaned up', ()
   assert.deepEqual(routes, [{ path: ROUTES.home, state: null }, { path: ROUTES.how, state: { source: 'forward' } }]);
   unsubscribe();
   assert.equal(listeners.size, 0);
+});
+
+for (const currentPath of [ROUTES.home, ROUTES.how]) {
+  test(`header Start Practicing navigates from ${currentPath}`, () => {
+    const destinations = [];
+    const result = activatePracticeSetup({ currentPath, navigate: path => destinations.push(path), documentRef: null });
+    assert.equal(result, 'navigated');
+    assert.deepEqual(destinations, [ROUTES.setup]);
+  });
+}
+
+test('header Start Practicing focuses the real discussion action while already on setup', () => {
+  const events = [];
+  const start = {
+    scrollIntoView(options) { events.push(['scroll', options.block]); },
+    focus(options) { events.push(['focus', options.preventScroll]); },
+  };
+  const result = activatePracticeSetup({
+    currentPath: ROUTES.setup,
+    navigate() { events.push(['navigate']); },
+    documentRef: { getElementById(id) { assert.equal(id, 'practice-start'); return start; } },
+  });
+  assert.equal(result, 'focused');
+  assert.deepEqual(events, [['scroll', 'center'], ['focus', true]]);
+});
+
+test('starting practice from a report clears completed state before opening setup', () => {
+  const events = [];
+  activatePracticeSetup({
+    currentPath: ROUTES.report,
+    onLeaveReport: () => events.push('reset'),
+    navigate: path => events.push(path),
+    documentRef: null,
+  });
+  assert.deepEqual(events, ['reset', ROUTES.setup]);
 });

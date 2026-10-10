@@ -16,7 +16,7 @@ function RouteLink({ to, currentPath, onNavigate, className = '', children }) {
   return <a className={`${className}${active ? ' active' : ''}`} href={to} onClick={follow} aria-current={active ? 'page' : undefined}>{children}</a>;
 }
 
-export default function SiteLayout({ path, health, onNavigate, children }) {
+export default function SiteLayout({ path, health, onNavigate, onPractice, children }) {
   return <div className="page site-shell">
     <header className="site-header">
       <RouteLink className="brand" to={ROUTES.home} currentPath={path} onNavigate={onNavigate}>
@@ -27,7 +27,7 @@ export default function SiteLayout({ path, health, onNavigate, children }) {
       </nav>
       <div className="header-actions">
         <div className={`connection ${health}`}><span />{health === 'online' ? 'Service ready' : health === 'offline' ? 'Service offline' : 'Connecting'}</div>
-        <RouteLink className="button primary header-cta" to={ROUTES.setup} currentPath={path} onNavigate={onNavigate}>Start practicing</RouteLink>
+        <a className={`button primary header-cta${path === ROUTES.setup ? ' active' : ''}`} href={ROUTES.setup} onClick={event => { if (event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) { event.preventDefault(); if (onPractice) onPractice(); else onNavigate(ROUTES.setup); } }}>Start practicing</a>
       </div>
     </header>
     {children}

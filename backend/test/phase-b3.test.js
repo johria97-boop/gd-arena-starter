@@ -7,6 +7,7 @@ import {
   FEEDBACK_CATEGORIES,
   FeedbackService,
   FeedbackValidationError,
+  calculateOverallScore,
   calculateMetrics,
 } from '../src/services/feedback.service.js';
 import { GeminiServiceError } from '../src/services/gemini.service.js';
@@ -105,6 +106,17 @@ test('Gemini feedback is normalized to the valid six-category schema', async () 
   assert.deepEqual(result.feedback.map(item => item.category), FEEDBACK_CATEGORIES);
   assert.ok(result.feedback.every(item => item.status === 'assessed' && item.score >= 0 && item.score <= 10));
   assert.ok(result.summary && result.recommendations.length === 2);
+  assert.equal(result.overallScore, 7);
+});
+
+test('overall score averages only assessed category scores on the 0-10 scale', () => {
+  assert.equal(calculateOverallScore([
+    { status: 'assessed', score: 6 },
+    { status: 'assessed', score: 7 },
+    { status: 'assessed', score: 8 },
+    { status: 'not_assessed', score: null },
+  ]), 7);
+  assert.equal(calculateOverallScore([{ status: 'not_assessed', score: null }]), null);
 });
 
 test('feedback evidence references only real transcript turns', async () => {
@@ -128,6 +140,7 @@ test('discussion without student evidence is returned as not assessed without Ge
     const created = await start(base);
     const report = await (await post(base, `/sessions/${created.sessionId}/end`)).json();
     assert.equal(report.status, 'insufficient_evidence');
+    assert.equal(report.overallScore, null);
     assert.ok(report.feedback.every(item => item.status === 'not_assessed' && item.score === null));
     assert.equal(gemini.calls.length, 0);
   });
@@ -140,8 +153,11 @@ test('Gemini feedback failure returns a partial report and preserves metrics', a
     await addStudent(base, created.sessionId, 'AI can broaden access to tutoring.');
     const report = await (await post(base, `/sessions/${created.sessionId}/end`)).json();
     assert.equal(report.status, 'partial');
+    assert.equal(report.overallScore, null);
     assert.equal(report.metrics.totalStudentTurns, 1);
     assert.ok(report.feedback.every(item => item.status === 'not_assessed'));
+    assert.equal(report.evaluationError.category, 'upstream_service');
+    assert.equal(report.evaluationError.retryable, true);
   });
 });
 

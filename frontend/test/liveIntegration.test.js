@@ -27,6 +27,9 @@ class IntegrationGemini {
           status: 'assessed',
           score: 6 + (index % 3),
           explanation: 'The student made a relevant, transcript-supported contribution.',
+          strength: 'The student directly responds to transcript evidence.',
+          improvementOpportunity: 'The argument would benefit from a more concrete example.',
+          actionableNextStep: 'Name the prior speaker and add one verifiable example.',
           improvement: 'Connect the next point to a named speaker and add one concrete example.',
           evidenceTurnIds: [studentId],
         })),
@@ -110,6 +113,19 @@ test('Gemini rate limits are structured, recoverable, and do not retain failed s
   });
 });
 
+test('ending intent stops debate generation and reuses the existing report endpoint', async () => {
+  await withApi(new IntegrationGemini(), async (api, gemini) => {
+    const created = await api.createSession('Will AI create more jobs than it replaces?');
+    await api.acknowledgeTurn(created.sessionId, created.turn.turnId, 'completed');
+    const intent = await api.sendStudentMessage(created.sessionId, "Let's end the discussion.");
+    assert.deepEqual(intent, { endRequested: true });
+    assert.equal(gemini.calls.length, 0);
+    const report = await api.endSession(created.sessionId);
+    assert.equal(report.status, 'insufficient_evidence');
+    assert.ok(!report.transcript.some(turn => /end the discussion/i.test(turn.text)));
+  });
+});
+
 test('network failures become stable frontend API errors', async () => {
   const api = createApiClient({
     baseUrl: 'http://unreachable.invalid/api',
@@ -119,6 +135,23 @@ test('network failures become stable frontend API errors', async () => {
     api.checkHealth(),
     error => error instanceof ApiError && error.code === 'NETWORK_ERROR' && error.status === 0,
   );
+});
+
+test('Alex audio client requests the exact turn as binary without exposing credentials', async () => {
+  const calls = [];
+  const api = createApiClient({
+    baseUrl: 'http://voice.test/api',
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      return { ok: true, status: 200, blob: async () => new Blob(['mock-audio']) };
+    },
+  });
+  const audio = await api.getAlexTurnAudio('session/id', 'turn/id');
+  assert.equal(audio.size, 10);
+  assert.equal(calls[0].url, 'http://voice.test/api/sessions/session%2Fid/turns/turn%2Fid/audio');
+  assert.equal(calls[0].options.method, 'POST');
+  assert.equal(calls[0].options.body, '{}');
+  assert.ok(!JSON.stringify(calls[0]).includes('apiKey'));
 });
 
 async function assertReportRenders(report) {
@@ -139,12 +172,29 @@ async function assertReportRenders(report) {
     assert.match(html, /grounded in evidence/i);
     assert.match(html, /The student contributed relevant ideas/);
     assert.match(html, /Evidence transcript/);
+    assert.match(html, /communication clarity/i);
+    assert.match(html, /What to strengthen/);
+    assert.match(html, /Book Your Next Practice Slot/);
+    assert.match(html, /not a server-side reservation/i);
     assert.match(html, new RegExp(`turn-${report.feedback.find(item => item.evidenceTurnIds.length).evidenceTurnIds[0]}`));
 
-    const partial = renderToStaticMarkup(createElement(FeedbackScreen, { report: { ...report, status: 'partial' }, topic: 'Topic', isMock: false, onRestart() {} }));
-    const insufficient = renderToStaticMarkup(createElement(FeedbackScreen, { report: { ...report, status: 'insufficient_evidence' }, topic: 'Topic', isMock: false, onRestart() {} }));
+    assert.match(html, /Overall assessed score/);
+    assert.match(html, />7</);
+    assert.match(html, /out of 10/);
+    assert.match(html, /Strength/);
+    assert.match(html, /Opportunity/);
+    assert.match(html, /Next move/);
+    assert.match(html, /directly responds to transcript evidence/);
+    assert.match(html, /benefit from a more concrete example/);
+    assert.match(html, /Name the prior speaker and add one verifiable example/);
+
+    const partial = renderToStaticMarkup(createElement(FeedbackScreen, { report: { ...report, status: 'partial', overallScore: null, evaluationError: { message: 'AI feedback generation timed out.' } }, topic: 'Topic', isMock: false, onRestart() {} }));
+    const insufficient = renderToStaticMarkup(createElement(FeedbackScreen, { report: { ...report, status: 'insufficient_evidence', overallScore: null }, topic: 'Topic', isMock: false, onRestart() {} }));
     assert.match(partial, /Partial evaluation/);
+    assert.match(partial, /Feedback unavailable/);
+    assert.match(partial, /timed out/);
     assert.match(insufficient, /Not enough evidence/);
+    assert.doesNotMatch(insufficient, /out of 10/);
   } finally {
     await vite.close();
   }

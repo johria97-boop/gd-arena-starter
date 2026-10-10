@@ -20,11 +20,14 @@ function recognitionMessage(code) {
 }
 
 export class BrowserSpeechController {
-  constructor({ environment, recognitionTimeoutMs = DEFAULT_RECOGNITION_TIMEOUT_MS, handlers = {} } = {}) {
+  constructor({ environment, recognitionTimeoutMs = DEFAULT_RECOGNITION_TIMEOUT_MS, customVoiceLoader, handlers = {} } = {}) {
     this.environment = environment || (typeof window === 'undefined' ? {} : window);
     this.Recognition = this.environment.SpeechRecognition || this.environment.webkitSpeechRecognition;
     this.synthesis = this.environment.speechSynthesis;
     this.Utterance = this.environment.SpeechSynthesisUtterance;
+    this.Audio = this.environment.Audio;
+    this.URL = this.environment.URL;
+    this.customVoiceLoader = customVoiceLoader;
     this.recognitionTimeoutMs = recognitionTimeoutMs;
     this.handlers = handlers;
     this.recognition = null;
@@ -38,6 +41,7 @@ export class BrowserSpeechController {
     return {
       recognition: Boolean(this.Recognition),
       synthesis: Boolean(this.synthesis && this.Utterance),
+      customAudio: Boolean(this.customVoiceLoader && this.Audio && this.URL?.createObjectURL),
     };
   }
 
@@ -137,7 +141,8 @@ export class BrowserSpeechController {
   }
 
   playTurn(turn) {
-    if (!this.capabilities.synthesis) {
+    const useCustomVoice = turn?.speaker === 'Alex' && this.capabilities.customAudio;
+    if (!useCustomVoice && !this.capabilities.synthesis) {
       this.emitError('playback', 'unsupported', 'Speech playback is not supported in this browser. Read the response and continue without audio.');
       return false;
     }
@@ -145,6 +150,30 @@ export class BrowserSpeechController {
     if (this.playback || this.settledTurnIds.has(turn.turnId)) return false;
 
     this.stopListening();
+    const playback = {
+      turnId: turn.turnId,
+      speaker: turn.speaker,
+      turn,
+      settled: false,
+      abortController: new AbortController(),
+      utterance: null,
+      audio: null,
+      objectUrl: null,
+    };
+    this.playback = playback;
+    this.handlers.onPlaybackState?.({ status: 'queued', turnId: turn.turnId, speaker: turn.speaker });
+    if (useCustomVoice) this.playCustomTurn(playback);
+    else this.playBrowserTurn(playback);
+    return true;
+  }
+
+  playBrowserTurn(playback) {
+    if (playback.settled || this.playback !== playback) return false;
+    if (!this.capabilities.synthesis) {
+      this.failPlayback(playback);
+      return false;
+    }
+    const { turn } = playback;
     const utterance = new this.Utterance(turn.text);
     const profile = VOICE_PROFILES[turn.speaker] || VOICE_PROFILES.Moderator;
     const voices = this.synthesis.getVoices?.() || [];
@@ -155,8 +184,7 @@ export class BrowserSpeechController {
     utterance.pitch = profile.pitch;
     utterance.volume = 1;
 
-    const playback = { turnId: turn.turnId, speaker: turn.speaker, utterance, settled: false };
-    this.playback = playback;
+    playback.utterance = utterance;
     utterance.onstart = () => this.handlers.onPlaybackState?.({ status: 'playing', turnId: turn.turnId, speaker: turn.speaker });
     utterance.onend = () => this.settlePlayback(playback, 'completed');
     utterance.onerror = event => {
@@ -167,7 +195,6 @@ export class BrowserSpeechController {
 
     try {
       if (this.synthesis.speaking || this.synthesis.pending) this.synthesis.cancel();
-      this.handlers.onPlaybackState?.({ status: 'queued', turnId: turn.turnId, speaker: turn.speaker });
       this.synthesis.speak(utterance);
       return true;
     } catch {
@@ -177,31 +204,88 @@ export class BrowserSpeechController {
     }
   }
 
+  async playCustomTurn(playback) {
+    try {
+      const blob = await this.customVoiceLoader(playback.turn, { signal: playback.abortController.signal });
+      if (playback.settled || this.playback !== playback) return;
+      const objectUrl = this.URL.createObjectURL(blob);
+      playback.objectUrl = objectUrl;
+      const audio = new this.Audio();
+      playback.audio = audio;
+      audio.onplay = () => this.handlers.onPlaybackState?.({ status: 'playing', turnId: playback.turnId, speaker: playback.speaker });
+      audio.onended = () => this.settlePlayback(playback, 'completed');
+      audio.onerror = () => this.fallbackToBrowser(playback, { code: 'ALEX_AUDIO_PLAYBACK_FAILED' });
+      audio.src = objectUrl;
+      const playResult = audio.play();
+      if (playResult?.catch) playResult.catch(() => this.fallbackToBrowser(playback, { code: 'ALEX_AUDIO_PLAYBACK_FAILED' }));
+    } catch (error) {
+      if (playback.settled || this.playback !== playback) return;
+      this.fallbackToBrowser(playback, error);
+    }
+  }
+
+  fallbackToBrowser(playback, error = {}) {
+    if (playback.settled || this.playback !== playback || playback.fallbackStarted) return;
+    playback.fallbackStarted = true;
+    this.cleanupCustomAudio(playback);
+    const configured = error.code !== 'ALEX_VOICE_NOT_CONFIGURED';
+    this.emitError(
+      'custom-playback',
+      error.code || 'ALEX_VOICE_UNAVAILABLE',
+      configured
+        ? 'Alex’s custom voice is temporarily unavailable. Using browser speech for this turn.'
+        : 'Alex’s custom voice is not configured yet. Using browser speech temporarily.',
+    );
+    this.playBrowserTurn(playback);
+  }
+
   failPlayback(playback) {
     if (playback.settled) return;
     playback.settled = true;
     if (this.playback === playback) this.playback = null;
+    this.cleanupPlayback(playback);
     this.handlers.onPlaybackState?.({ status: 'error', turnId: playback.turnId, speaker: null });
   }
 
-  cancelPlayback() {
+  cancelPlayback(notify = true) {
     if (!this.playback) return false;
     const playback = this.playback;
-    this.settlePlayback(playback, 'cancelled');
+    this.settlePlayback(playback, 'cancelled', notify);
     try { this.synthesis.cancel(); } catch { /* Nothing else to stop. */ }
     return true;
   }
 
-  settlePlayback(playback, event) {
+  settlePlayback(playback, event, notify = true) {
     if (playback.settled) return;
     playback.settled = true;
     if (this.playback === playback) this.playback = null;
+    this.cleanupPlayback(playback);
     this.settledTurnIds.add(playback.turnId);
     if (this.settledTurnIds.size > MAX_SETTLED_TURNS) {
       this.settledTurnIds.delete(this.settledTurnIds.values().next().value);
     }
     this.handlers.onPlaybackState?.({ status: event, turnId: playback.turnId, speaker: null });
-    this.handlers.onTurnEvent?.(event, playback.turnId);
+    if (notify) this.handlers.onTurnEvent?.(event, playback.turnId);
+  }
+
+  cleanupCustomAudio(playback) {
+    if (playback.audio) {
+      playback.audio.onplay = null;
+      playback.audio.onended = null;
+      playback.audio.onerror = null;
+      try { playback.audio.pause(); } catch { /* Audio is already stopped. */ }
+      try { playback.audio.removeAttribute?.('src'); playback.audio.load?.(); } catch { /* Resource is already released. */ }
+      playback.audio = null;
+    }
+    if (playback.objectUrl) {
+      try { this.URL.revokeObjectURL(playback.objectUrl); } catch { /* URL is already released. */ }
+      playback.objectUrl = null;
+    }
+  }
+
+  cleanupPlayback(playback) {
+    playback.abortController?.abort();
+    this.cleanupCustomAudio(playback);
   }
 
   emitError(source, code, message) {
@@ -213,7 +297,10 @@ export class BrowserSpeechController {
     const recognition = this.recognition;
     this.recognition = null;
     try { recognition?.abort(); } catch { /* Recognition is already closed. */ }
-    if (this.playback) this.playback.settled = true;
+    if (this.playback) {
+      this.playback.settled = true;
+      this.cleanupPlayback(this.playback);
+    }
     this.playback = null;
     try { this.synthesis?.cancel(); } catch { /* Playback is already closed. */ }
     this.handlers = {};

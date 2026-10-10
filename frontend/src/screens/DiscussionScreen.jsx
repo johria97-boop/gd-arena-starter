@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { ROOM_PARTICIPANTS } from '../constants.js';
+import { ROOM_PARTICIPANTS, secondsUntilDeadline } from '../constants.js';
 import { ArrowIcon, CheckIcon, ClockIcon, CloseIcon, MicIcon, StopIcon } from '../components/Icons.jsx';
 import { useBrowserSpeech } from '../hooks/useBrowserSpeech.js';
+import { getAlexTurnAudio } from '../services/api.js';
 
 function formatTime(totalSeconds) {
   const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
@@ -21,11 +22,14 @@ function PlaybackSync({ turn, busy, speech, onAcknowledge }) {
   const isCurrent = speech.lastTurnId === turn.turnId;
   const playing = isCurrent && ['queued', 'playing'].includes(speech.playbackStatus);
   const settledEvent = isCurrent && ['completed', 'cancelled'].includes(speech.playbackStatus) ? speech.playbackStatus : null;
+  const playbackSupported = turn.speaker === 'Alex'
+    ? speech.customAudioSupported || speech.synthesisSupported
+    : speech.synthesisSupported;
   const copy = playing
     ? `${turn.speaker} is being read aloud. Interrupting stops playback and reports this exact turn as cancelled.`
     : settledEvent
       ? 'Playback ended. The browser event is being synchronized with the discussion session.'
-      : speech.synthesisSupported
+      : playbackSupported
         ? 'Browser audio did not start automatically. Play this response or continue without audio.'
         : 'Speech synthesis is unavailable here. Read the response, then continue without audio.';
 
@@ -36,16 +40,21 @@ function PlaybackSync({ turn, busy, speech, onAcknowledge }) {
   return <div className="playback-sync"><div><strong>Voice playback · {turn.speaker}</strong><span>{copy}</span></div><div>
     {playing && <button className="button secondary" type="button" disabled={busy} onClick={cancelTurn}><CloseIcon />Interrupt</button>}
     {settledEvent && <button className="button secondary" type="button" disabled={busy} onClick={() => onAcknowledge(settledEvent, turn.turnId)}><CheckIcon />Retry sync</button>}
-    {!playing && !settledEvent && speech.synthesisSupported && <button className="button primary" type="button" disabled={busy} onClick={() => speech.playTurn(turn)}><MicIcon />Play response</button>}
+    {!playing && !settledEvent && playbackSupported && <button className="button primary" type="button" disabled={busy} onClick={() => speech.playTurn(turn)}><MicIcon />Play response</button>}
     {!playing && !settledEvent && <button className="button secondary" type="button" disabled={busy} onClick={cancelTurn}>Continue without audio</button>}
   </div></div>;
 }
 
 export default function DiscussionScreen({ session, busy, error, draft, onDraftChange, onClearError, onVoiceError, onSend, onNext, onAcknowledge, onEnd }) {
-  const [elapsed, setElapsed] = useState(0);
+  const [remaining, setRemaining] = useState(() => secondsUntilDeadline(session.deadlineAt));
+  const [timeExpired, setTimeExpired] = useState(false);
+  const deadlineHandled = useRef(false);
   const transcriptEnd = useRef(null);
   const inputRef = useRef(null);
   const speech = useBrowserSpeech({
+    loadCustomAudio(turn, options) {
+      return getAlexTurnAudio(session.sessionId, turn.turnId, options);
+    },
     onFinalTranscript(text) {
       onDraftChange(current => [current.trim(), text].filter(Boolean).join(' ').slice(0, 2000));
       setTimeout(() => inputRef.current?.focus(), 0);
@@ -55,9 +64,21 @@ export default function DiscussionScreen({ session, busy, error, draft, onDraftC
   });
 
   useEffect(() => {
-    const timer = setInterval(() => setElapsed(Math.floor((Date.now() - session.startedAt) / 1000)), 1000);
+    function updateTimer() {
+      const seconds = secondsUntilDeadline(session.deadlineAt);
+      setRemaining(seconds);
+      if (seconds > 0 || deadlineHandled.current) return;
+      deadlineHandled.current = true;
+      setTimeExpired(true);
+      speech.stopListening();
+      const activeTurnId = session.activeTurn?.turnId || null;
+      if (activeTurnId) speech.cancelPlayback(false);
+      onEnd(activeTurnId);
+    }
+    updateTimer();
+    const timer = setInterval(updateTimer, 500);
     return () => clearInterval(timer);
-  }, [session.startedAt]);
+  }, [session.deadlineAt, session.activeTurn?.turnId, onEnd, speech.stopListening, speech.cancelPlayback]);
   useEffect(() => {
     transcriptEnd.current?.scrollIntoView({ behavior: 'smooth' });
   }, [session.transcript.length, busy]);
@@ -66,7 +87,7 @@ export default function DiscussionScreen({ session, busy, error, draft, onDraftC
   }, [session.activeTurn?.turnId, speech.playTurn]);
 
   const activeSpeaker = speech.speakingSpeaker;
-  const canContribute = !busy && !session.activeTurn;
+  const canContribute = !busy && !session.activeTurn && !timeExpired;
   const visibleError = error || speech.error;
   const phase = busy ? 'generating' : activeSpeaker ? 'speaking' : session.activeTurn ? 'ready' : 'listening';
 
@@ -92,12 +113,20 @@ export default function DiscussionScreen({ session, busy, error, draft, onDraftC
     onClearError();
   }
 
+  function endDiscussion() {
+    deadlineHandled.current = true;
+    speech.stopListening();
+    const activeTurnId = session.activeTurn?.turnId || null;
+    if (activeTurnId) speech.cancelPlayback(false);
+    onEnd(activeTurnId);
+  }
+
   return <main className="room-page">
     <header className="room-header">
       <div className="brand compact"><span className="brand-mark">GD</span><span>ARENA</span></div>
       <div className="room-topic"><span>Discussion topic</span><strong>{session.topic}</strong></div>
-      <div className="room-timer"><ClockIcon /><span>{formatTime(elapsed)}</span></div>
-      <button className="button danger subtle" type="button" disabled={busy || Boolean(session.activeTurn)} onClick={() => { speech.stopListening(); onEnd(); }}><StopIcon />End discussion</button>
+      <div className="room-timer" aria-label={`${formatTime(remaining)} remaining`}><ClockIcon /><span>{formatTime(remaining)}</span></div>
+      <button className="button danger subtle" type="button" disabled={busy && Boolean(session.activeTurn)} onClick={endDiscussion}><StopIcon />End discussion</button>
     </header>
 
     <div className="room-layout">
@@ -109,6 +138,7 @@ export default function DiscussionScreen({ session, busy, error, draft, onDraftC
 
       <section className="conversation-panel">
         <div className="conversation-heading"><div><p className="eyebrow">LIVE TRANSCRIPT</p><h1>{activeSpeaker ? `${activeSpeaker} has the floor` : session.activeTurn ? `${session.activeTurn.speaker}'s response is ready` : busy ? 'Preparing the next response' : speech.listening ? 'Listening to your contribution' : 'The floor is open'}</h1></div><span className={`phase-pill ${phase}`}>{busy ? 'Generating' : activeSpeaker ? 'Speaking' : session.activeTurn ? 'Response ready' : speech.listening ? 'Listening to you' : 'Listening'}</span></div>
+        {timeExpired && <div className="room-concluded" role="status">Time is up. The discussion has concluded; your feedback report is being prepared.</div>}
         {visibleError && <div className="room-error" role="alert"><span>{visibleError}</span><button type="button" onClick={clearVisibleError} aria-label="Dismiss error"><CloseIcon /></button></div>}
         <div className="transcript" aria-live="polite">
           {session.transcript.map(turn => <article className={`transcript-turn speaker-${turn.speaker.toLowerCase()}`} key={turn.turnId}><div className="turn-meta"><span>{turn.speaker === 'Student' ? 'You' : turn.speaker}</span><time>{new Date(turn.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></div><p>{turn.text}</p></article>)}

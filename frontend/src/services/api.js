@@ -1,3 +1,5 @@
+import { DEFAULT_DISCUSSION_DURATION_MINUTES } from '../constants.js';
+
 const DEFAULT_BASE_URL = (import.meta.env?.VITE_API_BASE_URL || 'http://localhost:4000/api').replace(/\/$/, '');
 
 export class ApiError extends Error {
@@ -29,11 +31,31 @@ export function createApiClient({ baseUrl = DEFAULT_BASE_URL, fetchImpl = global
     return data;
   }
 
+  async function requestAudio(path, { signal } = {}) {
+    let response;
+    try {
+      response = await fetchImpl(`${base}${path}`, {
+        method: 'POST',
+        headers: { Accept: 'audio/mpeg', 'Content-Type': 'application/json' },
+        body: '{}',
+        signal,
+      });
+    } catch (error) {
+      if (error?.name === 'AbortError') throw new ApiError('Alex voice request was cancelled.', 0, 'REQUEST_ABORTED');
+      throw new ApiError('Unable to load Alex’s custom voice. Browser speech will be used.', 0, 'NETWORK_ERROR');
+    }
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new ApiError(data.error || `Voice request failed (${response.status})`, response.status, data.code || 'ALEX_VOICE_UNAVAILABLE');
+    }
+    return response.blob();
+  }
+
   return Object.freeze({
     request,
     checkHealth: () => request('/health'),
-    createSession: topic => request('/sessions', {
-      method: 'POST', body: JSON.stringify({ topic }),
+    createSession: (topic, durationMinutes = DEFAULT_DISCUSSION_DURATION_MINUTES) => request('/sessions', {
+      method: 'POST', body: JSON.stringify({ topic, durationMinutes }),
     }),
     sendStudentMessage: (sessionId, text) => request(`/sessions/${encodeURIComponent(sessionId)}/messages`, {
       method: 'POST', body: JSON.stringify({ text }),
@@ -45,8 +67,12 @@ export function createApiClient({ baseUrl = DEFAULT_BASE_URL, fetchImpl = global
       `/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/ack`,
       { method: 'POST', body: JSON.stringify({ event }) },
     ),
-    endSession: sessionId => request(`/sessions/${encodeURIComponent(sessionId)}/end`, {
-      method: 'POST', body: '{}',
+    getAlexTurnAudio: (sessionId, turnId, options) => requestAudio(
+      `/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/audio`,
+      options,
+    ),
+    endSession: (sessionId, options = {}) => request(`/sessions/${encodeURIComponent(sessionId)}/end`, {
+      method: 'POST', body: JSON.stringify({ cancelPendingTurn: options.cancelPendingTurn === true }),
     }),
   });
 }
@@ -59,4 +85,5 @@ export const createSession = api.createSession;
 export const sendStudentMessage = api.sendStudentMessage;
 export const requestNextTurn = api.requestNextTurn;
 export const acknowledgeTurn = api.acknowledgeTurn;
+export const getAlexTurnAudio = api.getAlexTurnAudio;
 export const endSession = api.endSession;

@@ -50,10 +50,31 @@ function voiceEnvironment() {
   };
 }
 
+function customVoiceEnvironment() {
+  const setup = voiceEnvironment();
+  const audios = [];
+  const revokedUrls = [];
+  class FakeAudio {
+    constructor() { audios.push(this); }
+    play() { this.played = true; this.onplay?.(); return Promise.resolve(); }
+    pause() { this.paused = true; }
+    removeAttribute(name) { if (name === 'src') this.src = ''; }
+    load() { this.loaded = true; }
+  }
+  setup.environment.Audio = FakeAudio;
+  setup.environment.URL = {
+    createObjectURL: () => `blob:alex-${audios.length + 1}`,
+    revokeObjectURL: url => revokedUrls.push(url),
+  };
+  return { ...setup, audios, revokedUrls };
+}
+
+const nextTask = () => new Promise(resolve => setTimeout(resolve, 0));
+
 test('reports unsupported speech APIs without throwing', () => {
   const errors = [];
   const controller = new BrowserSpeechController({ environment: {}, handlers: { onError: error => errors.push(error) } });
-  assert.deepEqual(controller.capabilities, { recognition: false, synthesis: false });
+  assert.deepEqual(controller.capabilities, { recognition: false, synthesis: false, customAudio: false });
   assert.equal(controller.startListening(), false);
   assert.equal(controller.playTurn({ turnId: 't1', speaker: 'Alex', text: 'Hello' }), false);
   assert.deepEqual(errors.map(error => error.code), ['unsupported', 'unsupported']);
@@ -125,6 +146,16 @@ test('manual playback cancellation is acknowledged once despite browser error ca
   assert.deepEqual(events, [['cancelled', 'turn-sarah']]);
 });
 
+test('orchestrated ending can stop playback without emitting a competing acknowledgment', () => {
+  const { environment, synthesis } = voiceEnvironment();
+  const events = [];
+  const controller = new BrowserSpeechController({ environment, handlers: { onTurnEvent: (...event) => events.push(event) } });
+  controller.playTurn({ turnId: 'turn-ending', speaker: 'David', text: 'This turn is being interrupted to end.' });
+  assert.equal(controller.cancelPlayback(false), true);
+  assert.equal(synthesis.current, null);
+  assert.deepEqual(events, []);
+});
+
 test('playback failures stay retryable and do not fabricate a cancellation event', () => {
   const { environment, synthesis } = voiceEnvironment();
   const events = [];
@@ -170,5 +201,88 @@ test('cleanup aborts recognition and cancels playback without emitting a turn ev
   playbackController.playTurn({ turnId: 'turn-david', speaker: 'David', text: 'Let us build on that.' });
   playbackController.destroy();
   assert.equal(synthesis.current, null);
+  assert.deepEqual(events, []);
+});
+
+test('routes Alex through custom audio while other speakers retain browser synthesis', async () => {
+  const { environment, audios, synthesis } = customVoiceEnvironment();
+  const loaded = [];
+  const events = [];
+  const controller = new BrowserSpeechController({
+    environment,
+    customVoiceLoader: async turn => { loaded.push(turn.turnId); return new Blob(['audio']); },
+    handlers: { onTurnEvent: (...event) => events.push(event) },
+  });
+  controller.playTurn({ turnId: 'alex-custom', speaker: 'Alex', text: 'A bounded argument.' });
+  await nextTask();
+  assert.deepEqual(loaded, ['alex-custom']);
+  assert.equal(audios[0].played, true);
+  assert.equal(synthesis.utterances.length, 0);
+  const finishAlex = audios[0].onended;
+  finishAlex();
+  finishAlex();
+  assert.deepEqual(events, [['completed', 'alex-custom']]);
+
+  for (const speaker of ['Sarah', 'David', 'Moderator']) {
+    controller.playTurn({ turnId: `${speaker}-browser`, speaker, text: `${speaker} keeps browser speech.` });
+    synthesis.utterances.at(-1).onend();
+  }
+  assert.equal(synthesis.utterances.length, 3);
+  assert.deepEqual(loaded, ['alex-custom']);
+});
+
+test('falls back to Alex browser speech when custom voice is not configured', async () => {
+  const { environment, synthesis } = customVoiceEnvironment();
+  const errors = [];
+  const events = [];
+  const controller = new BrowserSpeechController({
+    environment,
+    customVoiceLoader: async () => { throw Object.assign(new Error('missing'), { code: 'ALEX_VOICE_NOT_CONFIGURED' }); },
+    handlers: {
+      onError: error => errors.push(error),
+      onTurnEvent: (...event) => events.push(event),
+    },
+  });
+  controller.playTurn({ turnId: 'alex-fallback', speaker: 'Alex', text: 'Keep the transcript intact.' });
+  await nextTask();
+  assert.equal(synthesis.utterances.length, 1);
+  assert.match(errors[0].message, /not configured/i);
+  assert.deepEqual(events, []);
+  synthesis.utterances[0].onend();
+  assert.deepEqual(events, [['completed', 'alex-fallback']]);
+});
+
+test('intentional Alex interruption cancels exact custom turn and releases audio once', async () => {
+  const { environment, audios, revokedUrls } = customVoiceEnvironment();
+  const events = [];
+  const controller = new BrowserSpeechController({
+    environment,
+    customVoiceLoader: async () => new Blob(['audio']),
+    handlers: { onTurnEvent: (...event) => events.push(event) },
+  });
+  controller.playTurn({ turnId: 'alex-cancel', speaker: 'Alex', text: 'Interrupt this turn.' });
+  await nextTask();
+  assert.equal(controller.cancelPlayback(), true);
+  assert.equal(controller.cancelPlayback(), false);
+  assert.equal(audios[0].paused, true);
+  assert.deepEqual(revokedUrls, ['blob:alex-1']);
+  assert.deepEqual(events, [['cancelled', 'alex-cancel']]);
+});
+
+test('destroy aborts an in-flight custom request without fabricating an acknowledgment', () => {
+  const { environment } = customVoiceEnvironment();
+  const events = [];
+  let requestSignal;
+  const controller = new BrowserSpeechController({
+    environment,
+    customVoiceLoader: (_turn, { signal }) => {
+      requestSignal = signal;
+      return new Promise(() => {});
+    },
+    handlers: { onTurnEvent: (...event) => events.push(event) },
+  });
+  controller.playTurn({ turnId: 'alex-cleanup', speaker: 'Alex', text: 'Leave the room safely.' });
+  controller.destroy();
+  assert.equal(requestSignal.aborted, true);
   assert.deepEqual(events, []);
 });

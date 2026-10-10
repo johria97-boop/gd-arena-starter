@@ -19,7 +19,7 @@ const categories = [
 
 export function getMockFeedbackReport() {
   return {
-    sessionId: 'mock-f1-preview', status: 'complete', transcript,
+    sessionId: 'mock-f1-preview', status: 'complete', overallScore: 7.5, transcript,
     metrics: {
       totalStudentTurns: 2, totalAiParticipantTurns: 1, studentContributionPercentage: 34.6,
       totalStudentWords: 34, totalDiscussionWords: 98, discussionDurationSeconds: 72,

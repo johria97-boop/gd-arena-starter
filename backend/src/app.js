@@ -4,12 +4,14 @@ import { DiscussionEngine } from './engine/discussion.engine.js';
 import { createDiscussionRouter } from './routes/discussion.routes.js';
 import { GeminiService } from './services/gemini.service.js';
 import { FeedbackService } from './services/feedback.service.js';
+import { ElevenLabsTtsService } from './services/elevenlabs-tts.service.js';
 import { SessionStore } from './store/sessions.js';
 
 export function createApp({
   sessions = new SessionStore(),
   gemini = new GeminiService(),
   feedback = new FeedbackService({ gemini }),
+  tts = new ElevenLabsTtsService(),
 } = {}) {
   const app = express();
   app.use(cors({ origin: (process.env.FRONTEND_ORIGIN || 'http://localhost:5173').split(',') }));
@@ -18,6 +20,7 @@ export function createApp({
   app.use('/api', createDiscussionRouter({
     sessions,
     engine: new DiscussionEngine({ sessions, gemini, feedback }),
+    tts,
   }));
   app.use((req, res) => res.status(404).json({ error: 'Endpoint not found', code: 'ENDPOINT_NOT_FOUND' }));
   app.use((err, _req, res, _next) => {

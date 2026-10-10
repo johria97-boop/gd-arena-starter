@@ -35,6 +35,19 @@ export function updateBrowserHistory(browserWindow, destination, { replace = fal
   return path;
 }
 
+export function activatePracticeSetup({ currentPath, navigate, documentRef = globalThis.document, onLeaveReport }) {
+  const path = normalizePath(currentPath);
+  if (path === ROUTES.setup) {
+    const start = documentRef?.getElementById('practice-start');
+    start?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+    start?.focus?.({ preventScroll: true });
+    return 'focused';
+  }
+  if (path === ROUTES.report) onLeaveReport?.();
+  navigate(ROUTES.setup);
+  return 'navigated';
+}
+
 export function subscribeToHistory(browserWindow, callback) {
   const handlePopState = () => callback({
     path: normalizePath(browserWindow.location.pathname),

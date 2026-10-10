@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 const DEFAULT_TTL_MS = 60 * 60 * 1000;
 const DEFAULT_MAX_SESSIONS = 500;
 const DEFAULT_MAX_TURNS = 100;
+export const DEFAULT_DISCUSSION_DURATION_MS = 5 * 60 * 1000;
 
 export const SESSION_STATES = Object.freeze({
   READY: 'READY',
@@ -13,17 +14,19 @@ export const SESSION_STATES = Object.freeze({
 });
 
 export class SessionStore {
-  constructor({ ttlMs = DEFAULT_TTL_MS, maxSessions = DEFAULT_MAX_SESSIONS, maxTurns = DEFAULT_MAX_TURNS } = {}) {
+  constructor({ ttlMs = DEFAULT_TTL_MS, maxSessions = DEFAULT_MAX_SESSIONS, maxTurns = DEFAULT_MAX_TURNS, defaultDurationMs = DEFAULT_DISCUSSION_DURATION_MS, now = Date.now } = {}) {
     this.sessions = new Map();
     this.ttlMs = ttlMs;
     this.maxSessions = maxSessions;
     this.maxTurns = maxTurns;
+    this.defaultDurationMs = defaultDurationMs;
+    this.now = now;
   }
 
-  create(topic) {
+  create(topic, { durationMs = this.defaultDurationMs } = {}) {
     this.cleanup();
     while (this.sessions.size >= this.maxSessions) this.evictOldest();
-    const now = Date.now();
+    const now = this.now();
     const session = {
       id: randomUUID(),
       topic,
@@ -35,6 +38,11 @@ export class SessionStore {
       turnEvents: new Map(),
       report: null,
       evaluationPromise: null,
+      generationPromise: null,
+      endingPromise: null,
+      endRequested: false,
+      deadlineAt: now + durationMs,
+      deadlineTimer: null,
       createdAt: now,
       lastAccessedAt: now,
       expiresAt: now + this.ttlMs,
@@ -46,11 +54,12 @@ export class SessionStore {
   get(id) {
     const session = this.sessions.get(id);
     if (!session) return undefined;
-    if (session.expiresAt <= Date.now()) {
+    if (session.expiresAt <= this.now()) {
+      this.dispose(session);
       this.sessions.delete(id);
       return undefined;
     }
-    session.lastAccessedAt = Date.now();
+    session.lastAccessedAt = this.now();
     return session;
   }
 
@@ -60,7 +69,7 @@ export class SessionStore {
       turnId: randomUUID(),
       speaker,
       text,
-      timestamp: new Date().toISOString(),
+      timestamp: new Date(this.now()).toISOString(),
     };
     session.transcript.push(turn);
     if (session.transcript.length > this.maxTurns) {
@@ -82,9 +91,12 @@ export class SessionStore {
   }
 
   cleanup() {
-    const now = Date.now();
+    const now = this.now();
     for (const [id, session] of this.sessions) {
-      if (session.expiresAt <= now) this.sessions.delete(id);
+      if (session.expiresAt <= now) {
+        this.dispose(session);
+        this.sessions.delete(id);
+      }
     }
   }
 
@@ -93,6 +105,14 @@ export class SessionStore {
     for (const session of this.sessions.values()) {
       if (!oldest || session.lastAccessedAt < oldest.lastAccessedAt) oldest = session;
     }
-    if (oldest) this.sessions.delete(oldest.id);
+    if (oldest) {
+      this.dispose(oldest);
+      this.sessions.delete(oldest.id);
+    }
+  }
+
+  dispose(session) {
+    if (session.deadlineTimer) clearTimeout(session.deadlineTimer);
+    session.deadlineTimer = null;
   }
 }

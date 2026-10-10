@@ -26,3 +26,8 @@ export const CATEGORY_LABELS = {
   handling_disagreements_and_interruptions: 'Handling disagreement',
   closing_contribution: 'Closing contribution',
 };
+export const DEFAULT_DISCUSSION_DURATION_MINUTES = 5;
+
+export function secondsUntilDeadline(deadlineAt, now = Date.now()) {
+  return Math.max(0, Math.ceil((deadlineAt - now) / 1000));
+}

@@ -6,7 +6,7 @@ import HowItWorksScreen from './screens/HowItWorksScreen.jsx';
 import SetupScreen from './screens/SetupScreen.jsx';
 import DiscussionScreen from './screens/DiscussionScreen.jsx';
 import FeedbackScreen from './screens/FeedbackScreen.jsx';
-import { resolveAppRoute, ROUTES } from './services/navigation.js';
+import { activatePracticeSetup, resolveAppRoute, ROUTES } from './services/navigation.js';
 import {
   acknowledgeTurn,
   checkHealth,
@@ -16,6 +16,7 @@ import {
   sendStudentMessage,
 } from './services/api.js';
 import { getMockFeedbackReport } from './services/mockAdapter.js';
+import { DEFAULT_DISCUSSION_DURATION_MINUTES } from './constants.js';
 
 function localTurn(turn) {
   return { ...turn, timestamp: turn.timestamp || new Date().toISOString() };
@@ -91,15 +92,16 @@ export default function App() {
     setBusy(false);
   }
 
-  async function startDiscussion(topic) {
+  async function startDiscussion(topic, durationMinutes = DEFAULT_DISCUSSION_DURATION_MINUTES) {
     const token = beginOperation('create');
     if (!token) return false;
     try {
-      const result = await createSession(topic);
+      const result = await createSession(topic, durationMinutes);
       if (!isCurrent(token)) return false;
       const opening = localTurn(result.turn);
       turnEventsRef.current.clear();
-      replaceSession({ sessionId: result.sessionId, topic, transcript: [opening], activeTurn: opening, startedAt: Date.now() });
+      const startedAt = Date.now();
+      replaceSession({ sessionId: result.sessionId, topic, transcript: [opening], activeTurn: opening, startedAt, deadlineAt: startedAt + durationMinutes * 60_000, durationMinutes });
       setDraft('');
       navigate(ROUTES.discussion);
       return true;
@@ -157,6 +159,13 @@ export default function App() {
     try {
       const result = await sendStudentMessage(current.sessionId, text);
       if (!isCurrent(token)) return false;
+      if (result.endRequested) {
+        updateSession(value => ({ ...value, transcript: value.transcript.filter(turn => turn.turnId !== optimistic.turnId) }));
+        const finalReport = await endSession(current.sessionId);
+        if (!isCurrent(token)) return false;
+        setReport(finalReport); setReportTopic(current.topic); setIsMockReport(false); navigate(ROUTES.report);
+        return true;
+      }
       const turn = localTurn(result.turn);
       updateSession(value => ({ ...value, transcript: [...value.transcript, turn], activeTurn: turn }));
       return true;
@@ -189,12 +198,27 @@ export default function App() {
     }
   }
 
-  async function finishDiscussion() {
+  async function finishDiscussion(cancelTurnId = null) {
     const current = sessionRef.current;
-    const token = current && beginOperation('end', current.sessionId);
-    if (!token) return false;
+    if (!current || operationRef.current?.kind === 'end') return false;
+    const interruptedGeneration = !current.activeTurn
+      && ['message', 'next'].includes(operationRef.current?.kind);
+    const token = { kind: 'end', sessionId: current.sessionId };
+    operationRef.current = token;
+    setBusy(true);
+    setError('');
     try {
-      const result = await endSession(current.sessionId);
+      if (cancelTurnId && current.activeTurn?.turnId === cancelTurnId) {
+        turnEventsRef.current.set(cancelTurnId, 'cancelled');
+        try {
+          await acknowledgeTurn(current.sessionId, cancelTurnId, 'cancelled');
+        } catch (ackError) {
+          if (!['DUPLICATE_TURN_EVENT', 'STALE_TURN_ID'].includes(ackError.code)) throw ackError;
+        }
+        if (!isCurrent(token)) return false;
+        clearActiveTurn(current.sessionId, cancelTurnId, 'cancelled');
+      }
+      const result = await endSession(current.sessionId, { cancelPendingTurn: interruptedGeneration });
       if (!isCurrent(token)) return false;
       setReport(result); setReportTopic(current.topic); setIsMockReport(false); navigate(ROUTES.report);
       return true;
@@ -212,9 +236,22 @@ export default function App() {
     setIsMockReport(true); setError(''); navigate(ROUTES.report);
   }
 
-  function restart() {
+  function resetFinishedPractice() {
     operationRef.current = null; turnEventsRef.current.clear(); replaceSession(null);
-    setBusy(false); setDraft(''); setReport(null); setReportTopic(''); setIsMockReport(false); setError(''); navigate(ROUTES.setup);
+    setBusy(false); setDraft(''); setReport(null); setReportTopic(''); setIsMockReport(false); setError('');
+  }
+
+  function openPracticeSetup() {
+    activatePracticeSetup({
+      currentPath: route.path,
+      navigate,
+      onLeaveReport: resetFinishedPractice,
+    });
+  }
+
+  function restart() {
+    resetFinishedPractice();
+    navigate(ROUTES.setup);
   }
 
   if (route.path === ROUTES.discussion && session) {
@@ -228,5 +265,5 @@ export default function App() {
   else if (route.path === ROUTES.report) content = <EmptyReport onSetup={() => navigate(ROUTES.setup)} />;
   else content = <SetupScreen busy={busy} error={error} notice={routeState?.notice || route.notice} onStart={startDiscussion} onPreviewReport={previewReport} />;
 
-  return <SiteLayout path={route.path} health={health} onNavigate={navigate}>{content}</SiteLayout>;
+  return <SiteLayout path={route.path} health={health} onNavigate={navigate} onPractice={openPracticeSetup}>{content}</SiteLayout>;
 }

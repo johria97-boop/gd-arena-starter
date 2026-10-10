@@ -70,7 +70,7 @@ test('valid sessions have unique UUIDs and a moderator opening', async () => {
   });
 });
 
-test('student messages and predictable AI turns appear in the transcript', async () => {
+test('student messages and balanced AI turns appear in the transcript', async () => {
   const gemini = new MockGemini();
   await withServer(gemini, async base => {
     const { sessionId, turn: opening } = await createSession(base);
@@ -86,11 +86,13 @@ test('student messages and predictable AI turns appear in the transcript', async
     await acknowledge(base, sessionId, firstTurn.turnId);
     const second = await post(base, `/sessions/${sessionId}/next`);
     const secondTurn = (await second.json()).turn;
-    assert.equal(secondTurn.speaker, 'Sarah');
+    assert.ok(PARTICIPANTS.some(person => person.name === secondTurn.speaker));
+    assert.notEqual(secondTurn.speaker, firstTurn.speaker);
     await acknowledge(base, sessionId, secondTurn.turnId);
     const third = await post(base, `/sessions/${sessionId}/next`);
     const thirdTurn = (await third.json()).turn;
-    assert.equal(thirdTurn.speaker, 'David');
+    assert.ok(PARTICIPANTS.some(person => person.name === thirdTurn.speaker));
+    assert.equal(new Set([firstTurn.speaker, secondTurn.speaker, thirdTurn.speaker]).size, 3);
     await acknowledge(base, sessionId, thirdTurn.turnId);
 
     const ended = await post(base, `/sessions/${sessionId}/end`);
@@ -98,7 +100,7 @@ test('student messages and predictable AI turns appear in the transcript', async
     assert.ok(result.transcript.some(turn => turn.speaker === 'Student' && turn.text === studentText));
     assert.equal(result.transcript.at(-1).speaker, 'Moderator');
     assert.equal(result.feedback.length, 6);
-    assert.match(gemini.calls[1].prompt, /Alex: Mock response 1/);
+    assert.match(gemini.calls[1].prompt, new RegExp(`${firstTurn.speaker}: Mock response 1`));
   });
 });
 

@@ -1,5 +1,6 @@
 const CLEAR_PATTERNS = Object.freeze([
   /^(?:please\s+)?(?:let'?s|lets)\s+(?:end|finish)\s+(?:(?:this|the|our)\s+)?(?:discussion|conversation|topic|session)\s*(?:now|here)?$/,
+  /^(?:please\s+)?(?:let'?s|lets)\s+finish\s+here$/,
   /^(?:please\s+)?(?:end|stop|finish|conclude)\s+(?:(?:this|the|our)\s+)?(?:discussion|conversation|topic|session)\s*(?:now|here)?$/,
   /^we\s+should\s+wrap\s+up\s+(?:the\s+(?:discussion|conversation|topic|session)\s+)?now$/,
   /^(?:please\s+)?wrap\s+up\s+(?:(?:this|the|our)\s+)?(?:discussion|conversation|topic|session)(?:\s+now)?$/,

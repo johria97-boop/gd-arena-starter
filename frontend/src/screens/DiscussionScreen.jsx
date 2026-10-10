@@ -18,9 +18,12 @@ function Participant({ person, active, pending, thinking, studentSpeaking }) {
   return <article className={isActive ? 'room-person active' : 'room-person'}><div className={`avatar ${person.tone}`}>{person.initial}{isActive && <i />}</div><div><strong>{person.name === 'Student' ? 'You' : person.name}</strong><span>{person.role}</span></div><small>{status}</small></article>;
 }
 
-function PlaybackSync({ turn, busy, speech, onAcknowledge }) {
+function PlaybackSync({ turn, busy, speech, allowAiInterruption, onAcknowledge, onAiInterrupt }) {
+  const aiInterruptRef = useRef(onAiInterrupt);
+  aiInterruptRef.current = onAiInterrupt;
   const isCurrent = speech.lastTurnId === turn.turnId;
   const playing = isCurrent && ['queued', 'playing'].includes(speech.playbackStatus);
+  const speechStarted = isCurrent && speech.playbackStatus === 'playing';
   const settledEvent = isCurrent && ['completed', 'cancelled'].includes(speech.playbackStatus) ? speech.playbackStatus : null;
   const playbackSupported = turn.speaker === 'Alex'
     ? speech.customAudioSupported || speech.synthesisSupported
@@ -32,6 +35,15 @@ function PlaybackSync({ turn, busy, speech, onAcknowledge }) {
       : playbackSupported
         ? 'Browser audio did not start automatically. Play this response or continue without audio.'
         : 'Speech synthesis is unavailable here. Read the response, then continue without audio.';
+
+  useEffect(() => {
+    if (!speechStarted || !allowAiInterruption || !turn.interruption?.afterMs) return undefined;
+    const timer = setTimeout(() => {
+      if (!speech.cancelPlayback(false)) return;
+      aiInterruptRef.current(turn.turnId);
+    }, turn.interruption.afterMs);
+    return () => clearTimeout(timer);
+  }, [allowAiInterruption, speechStarted, speech.cancelPlayback, turn.interruption?.afterMs, turn.turnId]);
 
   function cancelTurn() {
     if (!speech.cancelPlayback()) onAcknowledge('cancelled', turn.turnId);
@@ -45,12 +57,14 @@ function PlaybackSync({ turn, busy, speech, onAcknowledge }) {
   </div></div>;
 }
 
-export default function DiscussionScreen({ session, busy, error, draft, onDraftChange, onClearError, onVoiceError, onSend, onNext, onAcknowledge, onEnd }) {
+export default function DiscussionScreen({ session, busy, error, draft, onDraftChange, onStudentIntent, onListeningChange, onClearError, onVoiceError, onSend, onNext, onAcknowledge, onEnd }) {
   const [remaining, setRemaining] = useState(() => secondsUntilDeadline(session.deadlineAt));
   const [timeExpired, setTimeExpired] = useState(false);
   const deadlineHandled = useRef(false);
   const transcriptEnd = useRef(null);
   const inputRef = useRef(null);
+  const listeningChangeRef = useRef(onListeningChange);
+  listeningChangeRef.current = onListeningChange;
   const speech = useBrowserSpeech({
     loadCustomAudio(turn, options) {
       return getAlexTurnAudio(session.sessionId, turn.turnId, options);
@@ -83,28 +97,41 @@ export default function DiscussionScreen({ session, busy, error, draft, onDraftC
     transcriptEnd.current?.scrollIntoView({ behavior: 'smooth' });
   }, [session.transcript.length, busy]);
   useEffect(() => {
-    if (session.activeTurn) speech.playTurn(session.activeTurn);
-  }, [session.activeTurn?.turnId, speech.playTurn]);
+    if (session.activeTurn && !speech.listening) speech.playTurn(session.activeTurn);
+  }, [session.activeTurn?.turnId, speech.listening, speech.playTurn]);
+  useEffect(() => {
+    listeningChangeRef.current?.(speech.listening);
+  }, [speech.listening]);
 
   const activeSpeaker = speech.speakingSpeaker;
-  const canContribute = !busy && !session.activeTurn && !timeExpired;
+  const canInteract = !busy && !timeExpired;
+  const floorOpen = canInteract && !session.activeTurn;
   const visibleError = error || speech.error;
   const phase = busy ? 'generating' : activeSpeaker ? 'speaking' : session.activeTurn ? 'ready' : 'listening';
 
   async function submit(event) {
     event.preventDefault();
     const text = draft.trim();
-    if (!text || !canContribute) return;
+    if (!text || !canInteract) return;
+    onStudentIntent();
     speech.stopListening();
+    const interruptTurnId = session.activeTurn?.turnId || null;
+    if (interruptTurnId) speech.cancelPlayback(false);
     onDraftChange('');
-    const sent = await onSend(text);
+    const sent = await onSend(text, interruptTurnId);
     if (!sent) onDraftChange(text);
   }
 
-  function toggleListening() {
-    if (!canContribute) return;
+  async function toggleListening() {
+    if (!canInteract) return;
+    onStudentIntent();
     if (speech.listening) speech.stopListening();
-    else speech.startListening();
+    else if (session.activeTurn) {
+      const turnId = session.activeTurn.turnId;
+      speech.cancelPlayback(false);
+      speech.startListening();
+      await onAcknowledge('cancelled', turnId);
+    } else speech.startListening();
     setTimeout(() => inputRef.current?.focus(), 0);
   }
 
@@ -146,14 +173,14 @@ export default function DiscussionScreen({ session, busy, error, draft, onDraftC
           <div ref={transcriptEnd} />
         </div>
 
-        {session.activeTurn && <PlaybackSync turn={session.activeTurn} busy={busy} speech={speech} onAcknowledge={onAcknowledge} />}
+        {session.activeTurn && <PlaybackSync turn={session.activeTurn} busy={busy} speech={speech} allowAiInterruption={!draft.trim() && !speech.listening} onAcknowledge={onAcknowledge} onAiInterrupt={turnId => onNext({ interruptTurnId: turnId })} />}
 
         <form className="composer" onSubmit={submit}>
-          <button className={speech.listening ? 'mic-button active' : 'mic-button'} type="button" disabled={!canContribute || !speech.recognitionSupported} onClick={toggleListening} aria-pressed={speech.listening} title={speech.recognitionSupported ? 'Toggle browser speech recognition' : 'Speech recognition is unavailable; use typed input'}><MicIcon muted={!speech.listening} /><span>{speech.listening ? 'Stop speaking' : 'Start speaking'}</span></button>
-          <div className="composer-input"><label htmlFor="student-message">Your contribution</label><textarea ref={inputRef} id="student-message" value={draft} onChange={event => onDraftChange(event.target.value)} placeholder={canContribute ? 'Speak or type your contribution…' : 'Wait for the active AI turn…'} maxLength={2000} rows={2} /><small>{draft.length}/2000</small>{speech.interimTranscript && <div className="voice-interim" aria-live="polite">Hearing: {speech.interimTranscript}</div>}</div>
-          <button className="send-button" type="submit" disabled={!canContribute || !draft.trim()} aria-label="Send contribution"><ArrowIcon /></button>
+          <button className={speech.listening ? 'mic-button active' : 'mic-button'} type="button" disabled={!canInteract || !speech.recognitionSupported} onClick={toggleListening} aria-pressed={speech.listening} title={speech.recognitionSupported ? 'Talk now; active AI playback will stop' : 'Speech recognition is unavailable; use typed input'}><MicIcon muted={!speech.listening} /><span>{speech.listening ? 'Stop speaking' : session.activeTurn ? 'Talk / interrupt' : 'Start speaking'}</span></button>
+          <div className="composer-input"><label htmlFor="student-message">Your contribution</label><textarea ref={inputRef} id="student-message" value={draft} onChange={event => onDraftChange(event.target.value)} placeholder={canInteract ? 'Speak or type your contribution…' : 'Preparing the next turn…'} maxLength={2000} rows={2} /><small>{draft.length}/2000</small>{speech.interimTranscript && <div className="voice-interim" aria-live="polite">Hearing: {speech.interimTranscript}</div>}</div>
+          <button className="send-button" type="submit" disabled={!canInteract || !draft.trim()} aria-label="Send contribution"><ArrowIcon /></button>
         </form>
-        <div className="room-actions"><button className="text-action" type="button" disabled={!canContribute} onClick={() => { speech.stopListening(); onNext(); }}>Invite another AI perspective <ArrowIcon /></button><span>{speech.recognitionSupported ? 'Review recognized text before sending.' : 'Voice recognition unavailable — typed input is active.'}</span></div>
+        <div className="room-actions"><button className="text-action" type="button" disabled={!floorOpen} onClick={() => { onStudentIntent(); speech.stopListening(); onNext(); }}>Invite another AI perspective <ArrowIcon /></button><span>{speech.recognitionSupported ? 'Review recognized text before sending.' : 'Voice recognition unavailable — typed input is active.'}</span></div>
       </section>
     </div>
   </main>;

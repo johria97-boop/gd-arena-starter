@@ -1,4 +1,4 @@
-# GD Arena API Contract - v0.6 (timed discussion flow)
+# GD Arena API Contract - v0.7 (automatic discussion flow)
 
 Base URL: `http://localhost:4000/api` locally. JSON over HTTPS in production,
 except for the explicitly documented binary Alex audio success response.
@@ -19,21 +19,32 @@ backend directly detected a microphone interruption.
   `{ "sessionId": "...", "turn": { "turnId": "...", "speaker": "Moderator", "text": "..." } }`
   `durationMinutes` is optional, defaults to `5`, and must be an integer from 1
   through 60. The success response remains unchanged.
-- `POST /sessions/:id/messages` with `{ "text": "..." }` ->
+- `POST /sessions/:id/messages` with
+  `{ "text": "...", "interruptTurnId": "optional-active-turn-id" }` ->
   `{ "turn": { "turnId": "...", "speaker": "Alex|Sarah|David|Moderator", "text": "..." } }`.
+  When `interruptTurnId` is present, the backend atomically cancels that exact
+  active turn before recording the student contribution and generating a response.
   A clear deterministic ending command instead returns `{ "endRequested": true }`
   without starting Gemini generation. The client must then call the existing `/end`
   endpoint to obtain the report.
-- `POST /sessions/:id/next` with `{}` ->
+- `POST /sessions/:id/next` with `{ "interruptTurnId": "optional-active-turn-id" }` ->
   `{ "turn": { "turnId": "...", "speaker": "...", "text": "..." } }`
+  A generated turn may also include `{ "interruption": { "afterMs": 1800 } }`.
+  This is a backend-owned, optional AI-interjection plan; the client cancels the
+  exact active turn before requesting the interjection with `interruptTurnId`.
 - `POST /sessions/:id/turns/:turnId/audio` with `{}` -> binary `audio/mpeg`.
   This is available only while the referenced turn is the session's active Alex
   turn. The endpoint accepts no text, speaker, voice ID, or provider options from
   the client; it synthesizes the already stored turn text. Successful responses
   use `Cache-Control: private, no-store`. Errors retain the standard JSON shape.
 - `POST /sessions/:id/turns/:turnId/ack` with
-  `{ "event": "completed|cancelled" }` ->
+  `{ "event": "completed|cancelled", "requestContinuation": true }` ->
   `{ "turnId": "...", "event": "completed|cancelled", "state": "LISTENING" }`
+  The optional `requestContinuation` flag adds `nextAction: "generate|listen"`.
+  A completed turn also includes bounded `continuationDelayMs` and a
+  `participationWindow` boolean so the client can pause briefly without requiring
+  a manual Continue action. A cancelled turn returns `nextAction: "listen"`.
+  Omitting it preserves the original acknowledgment response exactly.
 - `POST /sessions/:id/end` with `{ "cancelPendingTurn": false }` -> the evaluation
   report described below. `cancelPendingTurn: true` is reserved for the frontend's
   generation/end race, where a generated turn was never presented for playback.
@@ -58,10 +69,23 @@ While `SPEAKING`, the frontend must acknowledge the active `turnId` before calli
 - `cancelled` invalidates and removes the uncompleted active turn, preserves all
   previously completed transcript entries, and moves to `LISTENING`.
 
-To handle an interruption, the frontend cancels browser speech, posts `cancelled`
-for the active turn, and only then posts the student's new message. Duplicate or
-stale turn acknowledgments return `409`. Generation and playback conflicts also
-return `409`. A Gemini failure restores the prior `LISTENING` state and transcript.
+To handle a microphone interruption, the frontend immediately cancels browser
+speech, acknowledges `cancelled`, and begins manual recognition. A typed student
+interruption can send the active `interruptTurnId` with the message so cancellation
+and the new contribution are authoritative in one backend operation. Duplicate or
+stale turn events return `409`. A Gemini failure restores a consistent state and
+never restores an invalidated playback turn.
+
+After successful playback, clients may opt into backend-authorized automatic
+continuation. Completed AI turns return `nextAction: "generate"`; normal turns use
+a short delay, while every third consecutive AI contribution uses a four-second
+student participation window. Typing or starting the microphone cancels the
+client's single pending timer. If the student remains silent, that same timer
+requests the next turn without polling. Cancelled turns return `listen` and never
+continue automatically. AI interjections are infrequent, apply only to longer
+participant turns, start their delay only after audio playback has actually begun,
+cancel exact turn IDs, exclude the interrupted speaker from the immediate response,
+and cannot chain recursively.
 
 Each session has a backend-owned deadline established at creation. At the
 deadline, the backend uses the existing ending lifecycle, prevents new turns,

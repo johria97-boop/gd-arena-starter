@@ -146,6 +146,29 @@ test('manual playback cancellation is acknowledged once despite browser error ca
   assert.deepEqual(events, [['cancelled', 'turn-sarah']]);
 });
 
+test('does not start AI audio while microphone recognition is active', () => {
+  const { environment, synthesis, recognitionInstances } = voiceEnvironment();
+  const controller = new BrowserSpeechController({ environment });
+  assert.equal(controller.startListening(), true);
+  assert.equal(controller.playTurn({ turnId: 'turn-waiting', speaker: 'Sarah', text: 'Wait for the student.' }), false);
+  assert.equal(synthesis.utterances.length, 0);
+  assert.equal(recognitionInstances[0].stopped, undefined);
+  controller.stopListening();
+  assert.equal(controller.playTurn({ turnId: 'turn-waiting', speaker: 'Sarah', text: 'Now continue.' }), true);
+  assert.equal(synthesis.utterances.length, 1);
+});
+
+test('never overlaps two AI voices', () => {
+  const { environment, synthesis } = voiceEnvironment();
+  const controller = new BrowserSpeechController({ environment });
+  assert.equal(controller.playTurn({ turnId: 'turn-one', speaker: 'Alex', text: 'First point.' }), true);
+  assert.equal(controller.playTurn({ turnId: 'turn-two', speaker: 'David', text: 'Second point.' }), false);
+  assert.equal(synthesis.utterances.length, 1);
+  synthesis.utterances[0].onend();
+  assert.equal(controller.playTurn({ turnId: 'turn-two', speaker: 'David', text: 'Second point.' }), true);
+  assert.equal(synthesis.utterances.length, 2);
+});
+
 test('orchestrated ending can stop playback without emitting a competing acknowledgment', () => {
   const { environment, synthesis } = voiceEnvironment();
   const events = [];

@@ -69,21 +69,23 @@ test('complete client contract supports opening, discussion, interruption, closi
       error => error instanceof ApiError && error.code === 'DUPLICATE_TURN_EVENT',
     );
 
-    const alex = (await api.sendStudentMessage(created.sessionId, 'AI should expand access while teachers guide its use.')).turn;
-    assert.equal(alex.speaker, 'Alex');
-    await api.acknowledgeTurn(created.sessionId, alex.turnId, 'completed');
+    const firstAi = (await api.sendStudentMessage(created.sessionId, 'AI should expand access while teachers guide its use.')).turn;
+    assert.ok(['Alex', 'Sarah', 'David'].includes(firstAi.speaker));
+    await api.acknowledgeTurn(created.sessionId, firstAi.turnId, 'completed');
 
-    const sarah = (await api.requestNextTurn(created.sessionId)).turn;
-    assert.equal(sarah.speaker, 'Sarah');
-    assert.match(gemini.calls.at(-1).prompt, /Alex: Alex responds directly/);
-    await api.acknowledgeTurn(created.sessionId, sarah.turnId, 'completed');
+    const secondAi = (await api.requestNextTurn(created.sessionId)).turn;
+    assert.ok(['Alex', 'Sarah', 'David'].includes(secondAi.speaker));
+    assert.notEqual(secondAi.speaker, firstAi.speaker);
+    assert.match(gemini.calls.at(-1).prompt, new RegExp(`${firstAi.speaker}: ${firstAi.speaker} responds directly`));
+    await api.acknowledgeTurn(created.sessionId, secondAi.turnId, 'completed');
 
-    const david = (await api.requestNextTurn(created.sessionId)).turn;
-    assert.equal(david.speaker, 'David');
-    await api.acknowledgeTurn(created.sessionId, david.turnId, 'cancelled');
+    const thirdAi = (await api.requestNextTurn(created.sessionId)).turn;
+    assert.ok(['Alex', 'Sarah', 'David'].includes(thirdAi.speaker));
+    assert.ok(new Set([firstAi.speaker, secondAi.speaker, thirdAi.speaker]).size >= 2);
+    await api.acknowledgeTurn(created.sessionId, thirdAi.turnId, 'cancelled');
 
     const resumed = (await api.sendStudentMessage(created.sessionId, 'Sarah, I agree on safeguards, but access should remain central.')).turn;
-    assert.equal(resumed.speaker, 'Alex');
+    assert.ok(['Alex', 'Sarah', 'David'].includes(resumed.speaker));
     await api.acknowledgeTurn(created.sessionId, resumed.turnId, 'completed');
 
     const report = await api.endSession(created.sessionId);
@@ -91,7 +93,7 @@ test('complete client contract supports opening, discussion, interruption, closi
     assert.equal(report.feedback.length, 6);
     assert.equal(report.transcript.at(-1).speaker, 'Moderator');
     assert.ok(report.transcript.some(turn => turn.speaker === 'Student'));
-    assert.ok(!report.transcript.some(turn => turn.turnId === david.turnId));
+    assert.ok(!report.transcript.some(turn => turn.turnId === thirdAi.turnId));
     await assertReportRenders(report);
   });
 });
@@ -152,6 +154,46 @@ test('Alex audio client requests the exact turn as binary without exposing crede
   assert.equal(calls[0].options.method, 'POST');
   assert.equal(calls[0].options.body, '{}');
   assert.ok(!JSON.stringify(calls[0]).includes('apiKey'));
+});
+
+test('client sends exact interruption IDs and opts into automatic continuation metadata', async () => {
+  const calls = [];
+  const api = createApiClient({
+    baseUrl: 'http://discussion.test/api',
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options, body: JSON.parse(options.body) });
+      return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    },
+  });
+  await api.sendStudentMessage('session-id', 'My point', { interruptTurnId: 'active-turn' });
+  await api.requestNextTurn('session-id', { interruptTurnId: 'ai-turn' });
+  await api.acknowledgeTurn('session-id', 'turn-id', 'completed');
+  assert.deepEqual(calls[0].body, { text: 'My point', interruptTurnId: 'active-turn' });
+  assert.deepEqual(calls[1].body, { interruptTurnId: 'ai-turn' });
+  assert.deepEqual(calls[2].body, { event: 'completed', requestContinuation: true });
+});
+
+test('discussion room keeps typed interruption available while an AI turn is active', async () => {
+  const vite = await createViteServer({
+    root: path.resolve(process.cwd()), logLevel: 'silent',
+    server: { middlewareMode: true }, appType: 'custom',
+  });
+  try {
+    const { default: DiscussionScreen } = await vite.ssrLoadModule('/src/screens/DiscussionScreen.jsx');
+    const activeTurn = { turnId: 'active-turn', speaker: 'Sarah', text: 'A current AI contribution.', timestamp: new Date().toISOString() };
+    const html = renderToStaticMarkup(createElement(DiscussionScreen, {
+      session: { sessionId: 'session-id', topic: 'Topic', transcript: [activeTurn], activeTurn, deadlineAt: Date.now() + 60_000 },
+      busy: false, error: '', draft: 'I want to respond now.',
+      onDraftChange() {}, onStudentIntent() {}, onListeningChange() {}, onClearError() {}, onVoiceError() {},
+      onSend() {}, onNext() {}, onAcknowledge() {}, onEnd() {},
+    }));
+    assert.match(html, /Talk \/ interrupt/);
+    const sendButton = html.match(/<button class="send-button"[^>]*>/)?.[0] || '';
+    assert.match(sendButton, /aria-label="Send contribution"/);
+    assert.doesNotMatch(sendButton, /disabled/);
+  } finally {
+    await vite.close();
+  }
 });
 
 async function assertReportRenders(report) {

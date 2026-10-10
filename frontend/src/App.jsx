@@ -18,6 +18,10 @@ import {
 import { getMockFeedbackReport } from './services/mockAdapter.js';
 import { DEFAULT_DISCUSSION_DURATION_MINUTES } from './constants.js';
 
+const DEFAULT_CONTINUATION_DELAY_MS = 650;
+const STUDENT_GRACE_DELAY_MS = 4_000;
+const MAX_CONTINUATION_DELAY_MS = 10_000;
+
 function localTurn(turn) {
   return { ...turn, timestamp: turn.timestamp || new Date().toISOString() };
 }
@@ -47,12 +51,17 @@ export default function App() {
   const sessionRef = useRef(session);
   const operationRef = useRef(null);
   const turnEventsRef = useRef(new Map());
+  const continuationTimerRef = useRef(null);
+  const draftRef = useRef(draft);
+  const studentListeningRef = useRef(false);
   sessionRef.current = session;
+  draftRef.current = draft;
   const route = resolveAppRoute(path, { hasSession: Boolean(session), hasReport: Boolean(report) });
 
   useEffect(() => {
     checkHealth().then(() => setHealth('online')).catch(() => setHealth('offline'));
   }, []);
+  useEffect(() => () => clearTimeout(continuationTimerRef.current), []);
   useEffect(() => {
     if (route.redirect) navigate(route.redirect, { replace: true, state: { notice: route.notice } });
   }, [route.redirect, route.notice, navigate]);
@@ -60,6 +69,38 @@ export default function App() {
     document.title = PAGE_TITLES[route.path] || PAGE_TITLES[ROUTES.home];
     window.scrollTo({ top: 0, behavior: 'auto' });
   }, [route.path]);
+
+  function cancelContinuation() {
+    if (continuationTimerRef.current) clearTimeout(continuationTimerRef.current);
+    continuationTimerRef.current = null;
+  }
+
+  function scheduleContinuation(sessionId, delayMs = DEFAULT_CONTINUATION_DELAY_MS) {
+    cancelContinuation();
+    const boundedDelay = Number.isFinite(delayMs)
+      ? Math.min(MAX_CONTINUATION_DELAY_MS, Math.max(0, delayMs))
+      : DEFAULT_CONTINUATION_DELAY_MS;
+    continuationTimerRef.current = setTimeout(() => {
+      continuationTimerRef.current = null;
+      const current = sessionRef.current;
+      if (current?.sessionId === sessionId
+        && !current.activeTurn
+        && !operationRef.current
+        && !studentListeningRef.current
+        && !draftRef.current.trim()) nextTurn();
+    }, boundedDelay);
+  }
+
+  function resumeAfterStudentPause() {
+    const current = sessionRef.current;
+    if (current
+      && !current.activeTurn
+      && !operationRef.current
+      && !studentListeningRef.current
+      && !draftRef.current.trim()) {
+      scheduleContinuation(current.sessionId, STUDENT_GRACE_DELAY_MS);
+    }
+  }
 
   function replaceSession(next) {
     sessionRef.current = next;
@@ -74,6 +115,7 @@ export default function App() {
 
   function beginOperation(kind, sessionId = null) {
     if (operationRef.current) return null;
+    cancelContinuation();
     const token = { kind, sessionId };
     operationRef.current = token;
     setBusy(true);
@@ -133,14 +175,26 @@ export default function App() {
     if (!token) return false;
     turnEventsRef.current.set(turnId, event);
     try {
-      await acknowledgeTurn(current.sessionId, turnId, event);
+      const result = await acknowledgeTurn(current.sessionId, turnId, event);
       if (!isCurrent(token)) return false;
       clearActiveTurn(current.sessionId, turnId, event);
+      if (event === 'completed' && result.nextAction === 'generate') {
+        scheduleContinuation(current.sessionId, result.continuationDelayMs);
+      } else if (event === 'cancelled'
+        && !studentListeningRef.current
+        && !draftRef.current.trim()) {
+        scheduleContinuation(current.sessionId, STUDENT_GRACE_DELAY_MS);
+      }
       return true;
     } catch (requestError) {
       if (!isCurrent(token)) return false;
       if (requestError.code === 'DUPLICATE_TURN_EVENT') {
         clearActiveTurn(current.sessionId, turnId, event);
+        if (event === 'cancelled'
+          && !studentListeningRef.current
+          && !draftRef.current.trim()) {
+          scheduleContinuation(current.sessionId, STUDENT_GRACE_DELAY_MS);
+        }
         return true;
       }
       setError(requestError.message);
@@ -150,24 +204,25 @@ export default function App() {
     }
   }
 
-  async function sendMessage(text) {
+  async function sendMessage(text, interruptTurnId = null) {
     const current = sessionRef.current;
     const token = current && beginOperation('message', current.sessionId);
     if (!token) return false;
+    if (interruptTurnId) turnEventsRef.current.set(interruptTurnId, 'cancelled');
     const optimistic = { turnId: `local-${crypto.randomUUID()}`, speaker: 'Student', text, timestamp: new Date().toISOString() };
     updateSession(value => ({ ...value, transcript: [...value.transcript, optimistic] }));
     try {
-      const result = await sendStudentMessage(current.sessionId, text);
+      const result = await sendStudentMessage(current.sessionId, text, { interruptTurnId });
       if (!isCurrent(token)) return false;
       if (result.endRequested) {
-        updateSession(value => ({ ...value, transcript: value.transcript.filter(turn => turn.turnId !== optimistic.turnId) }));
+        updateSession(value => ({ ...value, transcript: value.transcript.filter(turn => turn.turnId !== optimistic.turnId && turn.turnId !== interruptTurnId), activeTurn: null }));
         const finalReport = await endSession(current.sessionId);
         if (!isCurrent(token)) return false;
         setReport(finalReport); setReportTopic(current.topic); setIsMockReport(false); navigate(ROUTES.report);
         return true;
       }
       const turn = localTurn(result.turn);
-      updateSession(value => ({ ...value, transcript: [...value.transcript, turn], activeTurn: turn }));
+      updateSession(value => ({ ...value, transcript: [...value.transcript.filter(item => item.turnId !== interruptTurnId), turn], activeTurn: turn }));
       return true;
     } catch (requestError) {
       if (isCurrent(token)) {
@@ -180,15 +235,16 @@ export default function App() {
     }
   }
 
-  async function nextTurn() {
+  async function nextTurn({ interruptTurnId = null } = {}) {
     const current = sessionRef.current;
-    const token = current && beginOperation('next', current.sessionId);
+    const token = current && beginOperation(interruptTurnId ? 'ai-interrupt' : 'next', current.sessionId);
     if (!token) return false;
+    if (interruptTurnId) turnEventsRef.current.set(interruptTurnId, 'cancelled');
     try {
-      const result = await requestNextTurn(current.sessionId);
+      const result = await requestNextTurn(current.sessionId, { interruptTurnId });
       if (!isCurrent(token)) return false;
       const turn = localTurn(result.turn);
-      updateSession(value => ({ ...value, transcript: [...value.transcript, turn], activeTurn: turn }));
+      updateSession(value => ({ ...value, transcript: [...value.transcript.filter(item => item.turnId !== interruptTurnId), turn], activeTurn: turn }));
       return true;
     } catch (requestError) {
       if (isCurrent(token)) setError(requestError.message);
@@ -201,6 +257,7 @@ export default function App() {
   async function finishDiscussion(cancelTurnId = null) {
     const current = sessionRef.current;
     if (!current || operationRef.current?.kind === 'end') return false;
+    cancelContinuation();
     const interruptedGeneration = !current.activeTurn
       && ['message', 'next'].includes(operationRef.current?.kind);
     const token = { kind: 'end', sessionId: current.sessionId };
@@ -237,7 +294,8 @@ export default function App() {
   }
 
   function resetFinishedPractice() {
-    operationRef.current = null; turnEventsRef.current.clear(); replaceSession(null);
+    cancelContinuation(); operationRef.current = null; turnEventsRef.current.clear(); replaceSession(null);
+    draftRef.current = ''; studentListeningRef.current = false;
     setBusy(false); setDraft(''); setReport(null); setReportTopic(''); setIsMockReport(false); setError('');
   }
 
@@ -254,8 +312,22 @@ export default function App() {
     navigate(ROUTES.setup);
   }
 
+  function updateDraft(value) {
+    cancelContinuation();
+    const next = typeof value === 'function' ? value(draftRef.current) : value;
+    draftRef.current = next;
+    setDraft(next);
+    if (!next.trim()) resumeAfterStudentPause();
+  }
+
+  function updateStudentListening(listening) {
+    studentListeningRef.current = listening;
+    if (listening) cancelContinuation();
+    else resumeAfterStudentPause();
+  }
+
   if (route.path === ROUTES.discussion && session) {
-    return <DiscussionScreen session={session} busy={busy} error={error} draft={draft} onDraftChange={setDraft} onClearError={() => setError('')} onVoiceError={setError} onSend={sendMessage} onNext={nextTurn} onAcknowledge={acknowledgeActive} onEnd={finishDiscussion} />;
+    return <DiscussionScreen session={session} busy={busy} error={error} draft={draft} onDraftChange={updateDraft} onStudentIntent={cancelContinuation} onListeningChange={updateStudentListening} onClearError={() => setError('')} onVoiceError={setError} onSend={sendMessage} onNext={nextTurn} onAcknowledge={acknowledgeActive} onEnd={finishDiscussion} />;
   }
 
   let content;

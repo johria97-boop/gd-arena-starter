@@ -12,6 +12,7 @@ export function createApp({
   gemini = new GeminiService(),
   feedback = new FeedbackService({ gemini }),
   tts = new ElevenLabsTtsService(),
+  random = Math.random,
 } = {}) {
   const app = express();
   app.use(cors({ origin: (process.env.FRONTEND_ORIGIN || 'http://localhost:5173').split(',') }));
@@ -19,7 +20,7 @@ export function createApp({
   app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'gd-arena-api' }));
   app.use('/api', createDiscussionRouter({
     sessions,
-    engine: new DiscussionEngine({ sessions, gemini, feedback }),
+    engine: new DiscussionEngine({ sessions, gemini, feedback, random }),
     tts,
   }));
   app.use((req, res) => res.status(404).json({ error: 'Endpoint not found', code: 'ENDPOINT_NOT_FOUND' }));

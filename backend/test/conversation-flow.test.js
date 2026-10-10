@@ -68,6 +68,7 @@ for (const [name, phrase] of [
   ["Let's end the discussion ends the session", "Let's end the discussion."],
   ["Let's end this conversation ends the session", "Let's end this conversation."],
   ["Let's end the topic ends the session", "Let's end the topic."],
+  ["Let's finish here ends the session", "Let's finish here."],
 ]) {
   test(name, async () => {
     const gemini = new FlowGemini();

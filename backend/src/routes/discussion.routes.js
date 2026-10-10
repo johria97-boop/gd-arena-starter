@@ -35,8 +35,14 @@ function findSession(req, sessions) {
   return session;
 }
 
-function publicTurn({ turnId, speaker, text }) {
-  return { turnId, speaker, text };
+function publicTurn({ turnId, speaker, text, interruption }) {
+  return { turnId, speaker, text, ...(interruption ? { interruption } : {}) };
+}
+
+function optionalTurnId(value) {
+  if (value === undefined || value === null) return null;
+  if (!UUID_PATTERN.test(value)) throw new DiscussionError('Invalid turn ID', 400, 'INVALID_TURN_ID');
+  return value;
 }
 
 function cleanDuration(value) {
@@ -76,15 +82,21 @@ export function createDiscussionRouter({ sessions, engine, tts }) {
   router.post('/sessions/:id/messages', async (req, res) => {
     const session = findSession(req, sessions);
     const text = cleanRequiredString(req.body?.text, 'text', MESSAGE_MAX_LENGTH);
+    const interruptTurnId = optionalTurnId(req.body?.interruptTurnId);
     const intent = classifyEndingIntent(text);
-    if (intent === 'end') return res.json(engine.acceptEndingIntent(session));
-    const turn = await engine.respond(session, text);
+    if (intent === 'end') return res.json(engine.acceptEndingIntent(session, interruptTurnId));
+    const turn = interruptTurnId
+      ? await engine.interruptAndRespond(session, interruptTurnId, text)
+      : await engine.respond(session, text);
     return res.json({ turn: publicTurn(turn) });
   });
 
   router.post('/sessions/:id/next', async (req, res) => {
     const session = findSession(req, sessions);
-    const turn = await engine.respond(session);
+    const interruptTurnId = optionalTurnId(req.body?.interruptTurnId);
+    const turn = interruptTurnId
+      ? await engine.interruptAndRespond(session, interruptTurnId)
+      : await engine.respond(session);
     res.json({ turn: publicTurn(turn) });
   });
 
@@ -119,7 +131,9 @@ export function createDiscussionRouter({ sessions, engine, tts }) {
     if (!TURN_EVENTS.has(req.body?.event)) {
       throw new DiscussionError('event must be completed or cancelled', 400, 'INVALID_TURN_EVENT');
     }
-    const result = engine.acknowledge(session, req.params.turnId, req.body.event);
+    const result = engine.acknowledge(session, req.params.turnId, req.body.event, {
+      includeNextAction: req.body?.requestContinuation === true,
+    });
     tts.release(session.id, req.params.turnId);
     res.json(result);
   });

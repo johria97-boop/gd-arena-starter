@@ -120,7 +120,7 @@ test('student cancellation invalidates only the active turn and permits resumpti
 
     const resumed = await post(base, `/sessions/${created.sessionId}/messages`, { text: 'Let me challenge that.' });
     assert.equal(resumed.status, 200);
-    assert.equal((await resumed.json()).turn.speaker, 'David');
+    assert.ok(['Alex', 'Sarah', 'David'].includes((await resumed.json()).turn.speaker));
     const transcript = sessions.get(created.sessionId).transcript;
     assert.ok(transcript.some(turn => turn.turnId === alex.turnId));
     assert.ok(!transcript.some(turn => turn.turnId === sarah.turnId));
@@ -135,9 +135,10 @@ test('AI-to-AI generation receives prior speaker context and engagement guidance
     await ack(base, created.sessionId, created.turn.turnId);
     const alex = (await (await post(base, `/sessions/${created.sessionId}/next`)).json()).turn;
     await ack(base, created.sessionId, alex.turnId);
-    const sarah = await post(base, `/sessions/${created.sessionId}/next`);
-    assert.equal((await sarah.json()).turn.speaker, 'Sarah');
-    assert.match(gemini.calls[1].prompt, /Alex: Contribution 1/);
+    const response = await post(base, `/sessions/${created.sessionId}/next`);
+    const nextTurn = (await response.json()).turn;
+    assert.ok(['Sarah', 'David'].includes(nextTurn.speaker));
+    assert.match(gemini.calls[1].prompt, new RegExp(`${alex.speaker}: Contribution 1`));
     assert.match(gemini.calls[1].prompt, /engage their point by name/);
   });
 });

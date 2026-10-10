@@ -57,15 +57,15 @@ export function createApiClient({ baseUrl = DEFAULT_BASE_URL, fetchImpl = global
     createSession: (topic, durationMinutes = DEFAULT_DISCUSSION_DURATION_MINUTES) => request('/sessions', {
       method: 'POST', body: JSON.stringify({ topic, durationMinutes }),
     }),
-    sendStudentMessage: (sessionId, text) => request(`/sessions/${encodeURIComponent(sessionId)}/messages`, {
-      method: 'POST', body: JSON.stringify({ text }),
+    sendStudentMessage: (sessionId, text, options = {}) => request(`/sessions/${encodeURIComponent(sessionId)}/messages`, {
+      method: 'POST', body: JSON.stringify({ text, ...(options.interruptTurnId ? { interruptTurnId: options.interruptTurnId } : {}) }),
     }),
-    requestNextTurn: sessionId => request(`/sessions/${encodeURIComponent(sessionId)}/next`, {
-      method: 'POST', body: '{}',
+    requestNextTurn: (sessionId, options = {}) => request(`/sessions/${encodeURIComponent(sessionId)}/next`, {
+      method: 'POST', body: JSON.stringify(options.interruptTurnId ? { interruptTurnId: options.interruptTurnId } : {}),
     }),
     acknowledgeTurn: (sessionId, turnId, event) => request(
       `/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/ack`,
-      { method: 'POST', body: JSON.stringify({ event }) },
+      { method: 'POST', body: JSON.stringify({ event, requestContinuation: true }) },
     ),
     getAlexTurnAudio: (sessionId, turnId, options) => requestAudio(
       `/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/audio`,

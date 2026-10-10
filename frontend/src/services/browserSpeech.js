@@ -147,9 +147,9 @@ export class BrowserSpeechController {
       return false;
     }
     if (!turn?.turnId || !turn?.speaker || !turn?.text) return false;
+    if (this.recognition) return false;
     if (this.playback || this.settledTurnIds.has(turn.turnId)) return false;
 
-    this.stopListening();
     const playback = {
       turnId: turn.turnId,
       speaker: turn.speaker,

@@ -78,3 +78,107 @@
 
 @media (max-width: 860px) { .room-header { grid-template-columns: auto 1fr auto; } .room-header .brand > span:last-child, .room-topic span, .room-header .danger { display: none; } .room-layout { grid-template-columns: 1fr; } .room-sidebar { display: none; } .conversation-panel { height: calc(100vh - 74px); } }
 @media (max-width: 600px) { .room-header { padding-inline: 14px; gap: 12px; } .conversation-panel { padding: 18px 14px 12px; } .phase-pill { display: none; } .transcript-turn { padding: 14px; } .playback-sync { align-items: stretch; flex-direction: column; } .playback-sync > div:last-child { display: grid; grid-template-columns: 1fr 1fr; } .composer { grid-template-columns: 55px 1fr 42px; } .mic-button span { display: none; } .room-actions > span { display: none; } }
+
+/* Light discussion room */
+.room-page { background: var(--bg); color: var(--text); }
+.room-header { min-height: 76px; padding: 12px 24px; border-bottom: 1px solid var(--line); background: rgba(255, 255, 255, .96); box-shadow: 0 5px 20px rgba(39, 73, 105, .04); grid-template-columns: 190px minmax(0, 1fr) auto auto; }
+.room-topic span { color: var(--muted-2); }.room-topic strong { color: var(--text); }.room-timer { color: var(--text); }.room-timer svg { color: #0f9dae; }
+.room-layout { min-height: calc(100vh - 76px); grid-template-columns: 270px minmax(0, 1fr); }
+.room-sidebar { padding: 24px 17px; border-right: 1px solid var(--line); background: #fff; }
+.sidebar-label { border-color: var(--line); color: var(--muted); }.sidebar-label small { color: var(--muted-2); }
+.room-roster { gap: 7px; }.room-person { min-height: 67px; padding: 9px; border-radius: 11px; }.room-person.active { background: var(--teal-dark); border-color: #a9e3e8; box-shadow: 0 6px 18px rgba(19, 184, 200, .08); }
+.room-person .avatar i { background: var(--teal); border-color: #fff; }.room-person strong { color: var(--text); }.room-person span { color: var(--muted-2); }.room-person > small { color: var(--muted-2); }.room-person.active > small { color: #0b8c9a; }
+.phase-note { border: 1px solid #d6e9eb; border-radius: 11px; background: #f2f9fa; }.phase-note > span { width: 27px; height: 27px; padding: 0; display: grid; place-items: center; border-radius: 8px; color: #0f8f9e; background: #dff4f6; }.phase-note svg { width: 14px; }.phase-note p { color: var(--muted); }
+.conversation-panel { height: calc(100vh - 76px); padding: 28px clamp(22px, 4vw, 58px) 20px; background: var(--bg); }
+.conversation-heading { border-color: var(--line); }.conversation-heading h1 { color: var(--text); font-family: var(--serif); font-weight: 500; }
+.phase-pill { border-color: #d8e3eb; border-radius: 999px; color: var(--muted); background: #fff; }.phase-pill.speaking { color: #0b8a97; border-color: #a9e2e7; background: var(--teal-dark); }.phase-pill.ready { color: #346aa7; border-color: #c9dcef; background: #edf4fc; }.phase-pill.generating { color: #346aa7; border-color: #c9dcef; background: #f1f6fb; }
+.transcript { padding: 22px 7px 12px 0; scrollbar-color: #c8d5df transparent; }
+.transcript-turn { max-width: 800px; margin-bottom: 14px; padding: 17px 19px; border: 1px solid var(--line); border-left: 3px solid #9aabb8; border-radius: 4px 13px 13px 4px; background: #fff; box-shadow: 0 7px 20px rgba(39, 73, 105, .035); }
+.transcript-turn.speaker-student { border: 1px solid #efddbf; border-right: 3px solid var(--amber); border-radius: 13px 4px 4px 13px; background: #fffaf2; }.transcript-turn.speaker-alex { border-left-color: var(--teal); }.transcript-turn.speaker-sarah { border-left-color: var(--blue); }.transcript-turn.speaker-david { border-left-color: #8a72c8; }
+.turn-meta span { color: var(--text); }.turn-meta time, .turn-meta small { color: var(--muted-2); }.transcript-turn p { color: var(--muted); }
+.typing-turn { background: #f9fbfd; }.typing-dots i { background: var(--teal); }
+.playback-sync { padding: 13px 15px; border: 1px solid #bfe4e7; border-radius: 12px; background: #edf9fa; }.playback-sync strong { color: var(--text); }.playback-sync span { color: var(--muted); }
+.composer { min-height: 90px; padding: 10px; border: 1px solid #d5e1e9; border-radius: 15px; background: #fff; box-shadow: 0 12px 35px rgba(39, 73, 105, .08); grid-template-columns: 108px 1fr 48px; }
+.mic-button { border: 1px solid #cfe5e8; border-radius: 11px; background: #edf9fa; color: #0f8f9e; }.mic-button.active { color: #b24141; border-color: #efcccc; background: #fff5f4; }.mic-button:disabled { opacity: .45; }.composer-input { border-radius: 10px; overflow: hidden; }.composer-input label { color: var(--muted-2); }.composer-input textarea { background: #f7f9fc; color: var(--text); }.composer-input small { color: var(--muted-2); }.voice-interim { color: #0b8794; }
+.send-button { border-radius: 11px; background: var(--teal); color: #fff; }.send-button:hover:not(:disabled) { background: #0f9dae; }.room-actions { color: var(--muted-2); }.text-action { color: #0f8f9e; }.text-action:disabled { color: #9aa9b5; }
+
+@media (max-width: 900px) {
+  .room-header { grid-template-columns: auto 1fr auto; }.room-header .brand > span:last-child, .room-topic span, .room-header .danger { display: none; }
+  .room-layout { grid-template-columns: 1fr; }.room-sidebar { padding: 12px 14px; border-right: 0; border-bottom: 1px solid var(--line); display: block; overflow-x: auto; }.sidebar-label, .phase-note { display: none; }.room-roster { display: flex; min-width: max-content; margin: 0; }.room-person { width: 145px; min-height: 58px; grid-template-columns: 37px 1fr; }.room-person .avatar { width: 35px; height: 35px; }.room-person > small { display: none; }
+  .conversation-panel { height: calc(100vh - 151px); }
+}
+@media (max-width: 600px) {
+  .room-header { min-height: 68px; }.room-topic strong { font-size: 11px; }.room-timer { min-width: auto; font-size: 11px; }.room-layout { min-height: calc(100vh - 68px); }.room-sidebar { padding: 10px 12px; }.room-person { width: 124px; }
+  .conversation-panel { height: calc(100vh - 139px); padding: 17px 12px 11px; }.conversation-heading { padding-bottom: 13px; }.conversation-heading h1 { font-size: 22px; }.transcript { padding-top: 14px; }.transcript-turn { padding: 13px; }.playback-sync { align-items: stretch; flex-direction: column; }.playback-sync > div:last-child { grid-template-columns: 1fr 1fr; }
+  .composer { min-height: 78px; grid-template-columns: 54px 1fr 43px; gap: 7px; }.mic-button svg { width: 21px; }.room-actions { padding-top: 7px; }
+}
+
+/* Premium laptop room */
+@media (min-width: 901px) {
+  .room-header { min-height: 84px; padding: 13px 3vw; grid-template-columns: 210px minmax(0, 1fr) auto auto; gap: 30px; }.brand.compact { font-size: 15px; }.brand.compact .brand-mark { width: 38px; height: 38px; }.room-topic span { font-size: 11px; }.room-topic strong { font-size: 15px; }.room-timer { font-size: 15px; }
+  .room-layout { min-height: calc(100vh - 84px); grid-template-columns: 300px minmax(0, 1fr); }.room-sidebar { padding: 26px 20px; }.sidebar-label { padding: 0 10px 17px; font-size: 12px; }.sidebar-label small { font-size: 11px; }
+  .room-roster { gap: 8px; }.room-person { min-height: 73px; padding: 10px; border-radius: 12px; transition: transform .18s ease, background .18s ease, border-color .18s ease; }.room-person:hover { transform: translateX(3px); background: #f7fbfc; }.room-person.active:hover { background: var(--teal-dark); }.room-person .avatar { width: 43px; height: 43px; }.room-person.active .avatar { box-shadow: 0 0 0 5px rgba(19, 184, 200, .1); }.room-person strong { font-size: 15px; }.room-person span, .room-person > small { font-size: 12px; }
+  .phase-note { padding: 15px; gap: 11px; }.phase-note > span { width: 32px; height: 32px; }.phase-note p { font-size: 12px; line-height: 1.55; }
+  .conversation-panel { height: calc(100vh - 84px); padding: 30px clamp(32px, 3.4vw, 64px) 22px; }.conversation-heading { padding-bottom: 22px; }.conversation-heading h1 { font-size: clamp(30px, 2.5vw, 40px); }.phase-pill { padding: 8px 13px; font-size: 12px; }
+  .transcript { padding: 22px 8px 12px 0; }.transcript-turn { width: min(94%, 920px); max-width: 920px; padding: 19px 22px; margin-bottom: 16px; }.turn-meta span { font-size: 14px; }.turn-meta time, .turn-meta small { font-size: 12px; }.transcript-turn p { margin-top: 10px; font-size: 16px; line-height: 1.65; }
+  .playback-sync { padding: 15px 17px; }.playback-sync strong { font-size: 14px; }.playback-sync span { font-size: 12px; }.playback-sync .button { min-height: 39px; font-size: 13px; }
+  .composer { min-height: 98px; padding: 11px; grid-template-columns: 118px 1fr 52px; gap: 11px; }.mic-button { font-size: 12px; }.mic-button svg { width: 22px; }.composer-input label { left: 13px; top: 9px; font-size: 11px; }.composer-input textarea { min-height: 74px; padding: 28px 52px 9px 13px; font-size: 16px; }.composer-input small { right: 10px; bottom: 8px; font-size: 11px; }.voice-interim { left: 13px; font-size: 12px; }.send-button svg { width: 21px; }
+  .room-actions { padding-top: 11px; font-size: 12px; }.text-action { font-size: 13px; }
+}
+
+/* Readability pass for laptop and desktop rooms */
+.room-header { min-height: 84px; }
+.room-topic span { font-size: 13px; }
+.room-topic strong { font-size: 17px; }
+.room-timer { font-size: 16px; }
+.room-layout { min-height: calc(100vh - 84px); grid-template-columns: 300px minmax(0, 1fr); }
+.room-sidebar { padding: 26px 19px; }
+.sidebar-label, .sidebar-label small { font-size: 13px; }
+.room-person { min-height: 78px; grid-template-columns: 52px 1fr auto; gap: 12px; }
+.room-person .avatar { width: 50px; height: 50px; font-size: 15px; }
+.room-person strong { font-size: 17px; }
+.room-person span, .room-person > small { font-size: 13px; }
+.phase-note p { font-size: 13px; }
+.conversation-panel { height: calc(100vh - 84px); padding: 28px clamp(26px, 3.5vw, 58px) 20px; }
+.conversation-heading h1 { font-size: clamp(32px, 2.6vw, 42px); font-family: var(--serif); font-weight: 500; }
+.phase-pill { font-size: 13px; }
+.turn-meta span { font-size: 17px; }
+.turn-meta time, .turn-meta small { font-size: 13px; }
+.transcript-turn { max-width: 940px; padding: 20px 23px; }
+.transcript-turn p { font-size: clamp(17px, 1.3vw, 18px); line-height: 1.65; }
+.playback-sync strong { font-size: 16px; }
+.playback-sync span { font-size: 14px; }
+.playback-sync .button { font-size: 14px; }
+.composer { min-height: 104px; grid-template-columns: 130px 1fr 54px; }
+.mic-button { font-size: 14px; }
+.composer-input label { font-size: 13px; }
+.composer-input textarea { min-height: 80px; padding-top: 30px; font-size: 17px; }
+.composer-input small, .voice-interim { font-size: 13px; }
+.room-actions { font-size: 13px; }
+.text-action { font-size: 15px; }
+
+@media (max-width: 1100px) {
+  .room-layout { grid-template-columns: 260px minmax(0, 1fr); }
+  .room-person { grid-template-columns: 46px 1fr; }
+  .room-person .avatar { width: 44px; height: 44px; }
+  .room-person > small { grid-column: 2; }
+  .composer { grid-template-columns: 110px 1fr 50px; }
+}
+
+@media (max-width: 860px) {
+  .room-layout { grid-template-columns: 1fr; }
+  .conversation-panel { height: calc(100vh - 84px); }
+}
+
+@media (max-width: 600px) {
+  .room-header { min-height: 76px; }
+  .room-topic strong { font-size: 15px; }
+  .room-timer { font-size: 14px; }
+  .conversation-panel { height: calc(100vh - 76px); padding: 17px 14px 12px; }
+  .conversation-heading h1 { font-size: 29px; }
+  .transcript-turn { padding: 16px; }
+  .turn-meta span { font-size: 15px; }
+  .transcript-turn p { font-size: 16px; }
+  .composer { min-height: 92px; grid-template-columns: 52px 1fr 44px; }
+  .composer-input textarea { min-height: 68px; font-size: 16px; }
+}

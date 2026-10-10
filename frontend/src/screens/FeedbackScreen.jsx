@@ -19,11 +19,7 @@ export default function FeedbackScreen({ report, topic, isMock, onRestart }) {
   const strengths = [...assessed].sort((a, b) => b.score - a.score).slice(0, 3);
   const speakers = Object.entries(report.metrics?.perSpeaker || {}).filter(([, value]) => value.turns > 0);
 
-  return <main className="page report-page">
-    <header className="site-header report-header">
-      <div className="brand"><span className="brand-mark">GD</span><span>ARENA</span></div>
-      <button className="button secondary" type="button" onClick={onRestart}><RestartIcon />New discussion</button>
-    </header>
+  return <main className="report-page">
     {isMock && <div className="mock-banner"><strong>F1 mock report preview</strong><span>This clearly labelled adapter demonstrates the report UI only. Production sessions use `/api/sessions/:id/end`.</span></div>}
     {report.status !== 'complete' && <div className={`report-status ${report.status}`}><strong>{report.status === 'partial' ? 'Partial evaluation' : 'Not enough evidence'}</strong><span>{report.status === 'partial' ? 'Your transcript and metrics are safe, but AI feedback was unavailable.' : 'Add student contributions to receive scored feedback.'}</span></div>}
 

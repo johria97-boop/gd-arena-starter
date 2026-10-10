@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
+import SiteLayout from './components/SiteLayout.jsx';
+import { useBrowserRoute } from './hooks/useBrowserRoute.js';
+import LandingScreen from './screens/LandingScreen.jsx';
+import HowItWorksScreen from './screens/HowItWorksScreen.jsx';
 import SetupScreen from './screens/SetupScreen.jsx';
 import DiscussionScreen from './screens/DiscussionScreen.jsx';
 import FeedbackScreen from './screens/FeedbackScreen.jsx';
+import { resolveAppRoute, ROUTES } from './services/navigation.js';
 import {
   acknowledgeTurn,
   checkHealth,
@@ -16,10 +21,23 @@ function localTurn(turn) {
   return { ...turn, timestamp: turn.timestamp || new Date().toISOString() };
 }
 
+const PAGE_TITLES = {
+  [ROUTES.home]: 'GD Arena — AI Group Discussion Practice',
+  [ROUTES.how]: 'How It Works — GD Arena',
+  [ROUTES.setup]: 'Practice Setup — GD Arena',
+  [ROUTES.discussion]: 'Live Discussion — GD Arena',
+  [ROUTES.report]: 'Feedback Report — GD Arena',
+};
+
+function EmptyReport({ onSetup }) {
+  return <main className="empty-page"><p className="eyebrow">FEEDBACK REPORT</p><h1>No report is available yet.</h1><p>Complete a discussion to generate transcript-grounded performance feedback and participation metrics.</p><button className="button primary large" type="button" onClick={onSetup}>Start a practice session</button></main>;
+}
+
 export default function App() {
-  const [screen, setScreen] = useState('setup');
+  const { path, state: routeState, navigate } = useBrowserRoute();
   const [health, setHealth] = useState('checking');
   const [session, setSession] = useState(null);
+  const [draft, setDraft] = useState('');
   const [report, setReport] = useState(null);
   const [reportTopic, setReportTopic] = useState('');
   const [isMockReport, setIsMockReport] = useState(false);
@@ -29,10 +47,18 @@ export default function App() {
   const operationRef = useRef(null);
   const turnEventsRef = useRef(new Map());
   sessionRef.current = session;
+  const route = resolveAppRoute(path, { hasSession: Boolean(session), hasReport: Boolean(report) });
 
   useEffect(() => {
     checkHealth().then(() => setHealth('online')).catch(() => setHealth('offline'));
   }, []);
+  useEffect(() => {
+    if (route.redirect) navigate(route.redirect, { replace: true, state: { notice: route.notice } });
+  }, [route.redirect, route.notice, navigate]);
+  useEffect(() => {
+    document.title = PAGE_TITLES[route.path] || PAGE_TITLES[ROUTES.home];
+    window.scrollTo({ top: 0, behavior: 'auto' });
+  }, [route.path]);
 
   function replaceSession(next) {
     sessionRef.current = next;
@@ -74,7 +100,8 @@ export default function App() {
       const opening = localTurn(result.turn);
       turnEventsRef.current.clear();
       replaceSession({ sessionId: result.sessionId, topic, transcript: [opening], activeTurn: opening, startedAt: Date.now() });
-      setScreen('discussion');
+      setDraft('');
+      navigate(ROUTES.discussion);
       return true;
     } catch (requestError) {
       if (isCurrent(token)) {
@@ -169,7 +196,7 @@ export default function App() {
     try {
       const result = await endSession(current.sessionId);
       if (!isCurrent(token)) return false;
-      setReport(result); setReportTopic(current.topic); setIsMockReport(false); setScreen('feedback');
+      setReport(result); setReportTopic(current.topic); setIsMockReport(false); navigate(ROUTES.report);
       return true;
     } catch (requestError) {
       if (isCurrent(token)) setError(requestError.message);
@@ -182,15 +209,24 @@ export default function App() {
   function previewReport() {
     if (operationRef.current) return;
     setReport(getMockFeedbackReport()); setReportTopic('Will AI create more jobs than it replaces?');
-    setIsMockReport(true); setError(''); setScreen('feedback');
+    setIsMockReport(true); setError(''); navigate(ROUTES.report);
   }
 
   function restart() {
     operationRef.current = null; turnEventsRef.current.clear(); replaceSession(null);
-    setBusy(false); setReport(null); setReportTopic(''); setIsMockReport(false); setError(''); setScreen('setup');
+    setBusy(false); setDraft(''); setReport(null); setReportTopic(''); setIsMockReport(false); setError(''); navigate(ROUTES.setup);
   }
 
-  if (screen === 'discussion' && session) return <DiscussionScreen session={session} busy={busy} error={error} onClearError={() => setError('')} onVoiceError={setError} onSend={sendMessage} onNext={nextTurn} onAcknowledge={acknowledgeActive} onEnd={finishDiscussion} />;
-  if (screen === 'feedback' && report) return <FeedbackScreen report={report} topic={reportTopic} isMock={isMockReport} onRestart={restart} />;
-  return <SetupScreen health={health} busy={busy} error={error} onStart={startDiscussion} onPreviewReport={previewReport} />;
+  if (route.path === ROUTES.discussion && session) {
+    return <DiscussionScreen session={session} busy={busy} error={error} draft={draft} onDraftChange={setDraft} onClearError={() => setError('')} onVoiceError={setError} onSend={sendMessage} onNext={nextTurn} onAcknowledge={acknowledgeActive} onEnd={finishDiscussion} />;
+  }
+
+  let content;
+  if (route.path === ROUTES.home) content = <LandingScreen onSetup={() => navigate(ROUTES.setup)} onHow={() => navigate(ROUTES.how)} />;
+  else if (route.path === ROUTES.how) content = <HowItWorksScreen onSetup={() => navigate(ROUTES.setup)} />;
+  else if (route.path === ROUTES.report && report) content = <FeedbackScreen report={report} topic={reportTopic} isMock={isMockReport} onRestart={restart} />;
+  else if (route.path === ROUTES.report) content = <EmptyReport onSetup={() => navigate(ROUTES.setup)} />;
+  else content = <SetupScreen busy={busy} error={error} notice={routeState?.notice || route.notice} onStart={startDiscussion} onPreviewReport={previewReport} />;
+
+  return <SiteLayout path={route.path} health={health} onNavigate={navigate}>{content}</SiteLayout>;
 }

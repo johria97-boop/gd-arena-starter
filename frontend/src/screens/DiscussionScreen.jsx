@@ -41,14 +41,13 @@ function PlaybackSync({ turn, busy, speech, onAcknowledge }) {
   </div></div>;
 }
 
-export default function DiscussionScreen({ session, busy, error, onClearError, onVoiceError, onSend, onNext, onAcknowledge, onEnd }) {
+export default function DiscussionScreen({ session, busy, error, draft, onDraftChange, onClearError, onVoiceError, onSend, onNext, onAcknowledge, onEnd }) {
   const [elapsed, setElapsed] = useState(0);
-  const [draft, setDraft] = useState('');
   const transcriptEnd = useRef(null);
   const inputRef = useRef(null);
   const speech = useBrowserSpeech({
     onFinalTranscript(text) {
-      setDraft(current => [current.trim(), text].filter(Boolean).join(' ').slice(0, 2000));
+      onDraftChange(current => [current.trim(), text].filter(Boolean).join(' ').slice(0, 2000));
       setTimeout(() => inputRef.current?.focus(), 0);
     },
     onTurnEvent: onAcknowledge,
@@ -76,9 +75,9 @@ export default function DiscussionScreen({ session, busy, error, onClearError, o
     const text = draft.trim();
     if (!text || !canContribute) return;
     speech.stopListening();
-    setDraft('');
+    onDraftChange('');
     const sent = await onSend(text);
-    if (!sent) setDraft(text);
+    if (!sent) onDraftChange(text);
   }
 
   function toggleListening() {
@@ -105,7 +104,7 @@ export default function DiscussionScreen({ session, busy, error, onClearError, o
       <aside className="room-sidebar">
         <div className="sidebar-label"><span>Room</span><small>{session.sessionId.slice(0, 8)}</small></div>
         <div className="room-roster">{ROOM_PARTICIPANTS.map(person => <Participant key={person.name} person={person} active={activeSpeaker} pending={session.activeTurn?.speaker} thinking={busy && !session.activeTurn} studentSpeaking={speech.listening} />)}</div>
-        <div className="phase-note"><span>F2</span><p>Browser recognition is manual and pauses for AI playback. Typed input remains available.</p></div>
+        <div className="phase-note"><span><MicIcon /></span><p>Recognition is manual and pauses for AI playback. Typed input always remains available.</p></div>
       </aside>
 
       <section className="conversation-panel">
@@ -121,7 +120,7 @@ export default function DiscussionScreen({ session, busy, error, onClearError, o
 
         <form className="composer" onSubmit={submit}>
           <button className={speech.listening ? 'mic-button active' : 'mic-button'} type="button" disabled={!canContribute || !speech.recognitionSupported} onClick={toggleListening} aria-pressed={speech.listening} title={speech.recognitionSupported ? 'Toggle browser speech recognition' : 'Speech recognition is unavailable; use typed input'}><MicIcon muted={!speech.listening} /><span>{speech.listening ? 'Stop speaking' : 'Start speaking'}</span></button>
-          <div className="composer-input"><label htmlFor="student-message">Your contribution</label><textarea ref={inputRef} id="student-message" value={draft} onChange={event => setDraft(event.target.value)} placeholder={canContribute ? 'Speak or type your contribution…' : 'Wait for the active AI turn…'} maxLength={2000} rows={2} /><small>{draft.length}/2000</small>{speech.interimTranscript && <div className="voice-interim" aria-live="polite">Hearing: {speech.interimTranscript}</div>}</div>
+          <div className="composer-input"><label htmlFor="student-message">Your contribution</label><textarea ref={inputRef} id="student-message" value={draft} onChange={event => onDraftChange(event.target.value)} placeholder={canContribute ? 'Speak or type your contribution…' : 'Wait for the active AI turn…'} maxLength={2000} rows={2} /><small>{draft.length}/2000</small>{speech.interimTranscript && <div className="voice-interim" aria-live="polite">Hearing: {speech.interimTranscript}</div>}</div>
           <button className="send-button" type="submit" disabled={!canContribute || !draft.trim()} aria-label="Send contribution"><ArrowIcon /></button>
         </form>
         <div className="room-actions"><button className="text-action" type="button" disabled={!canContribute} onClick={() => { speech.stopListening(); onNext(); }}>Invite another AI perspective <ArrowIcon /></button><span>{speech.recognitionSupported ? 'Review recognized text before sending.' : 'Voice recognition unavailable — typed input is active.'}</span></div>
